@@ -267,7 +267,7 @@ class ControlWebSocket:
                         "SSL 인증서 검증에 실패했습니다. "
                         "'pip install --upgrade certifi'를 실행해 보세요. "
                         "자세한 해결 방법: "
-                        "https://github.com/clawopshq/sdk-python/blob/main/docs/agent/troubleshooting.md#ssl-인증서-에러-sslcertverificationerror"
+                        "https://github.com/koreaaitel/sdk-python/blob/main/docs/agent/troubleshooting.md#ssl-인증서-에러-sslcertverificationerror"
                     )
                 log.warning(f"Control WS error: {type(e).__name__}: {e}")
             finally:

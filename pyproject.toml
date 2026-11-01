@@ -29,9 +29,9 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/clawopshq/sdk-python"
+Homepage = "https://github.com/koreaaitel/sdk-python"
 Documentation = "https://docs.claw-ops.com"
-Repository = "https://github.com/clawopshq/sdk-python"
+Repository = "https://github.com/koreaaitel/sdk-python"
 
 [tool.hatch.version]
 path = "src/clawops/_version.py"
