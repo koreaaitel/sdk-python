@@ -121,7 +121,7 @@ def test_pagination_meta():
     assert meta.page_size == 20
 
 
-# ── 전환(담당자 연결) 필드 — clawopshq/clawops#1215 ──────────────────────────
+# ── 전환(담당자 연결) 필드 — koreaaitel/clawops#1215 ──────────────────────────
 # 서버 응답 모양: warm 전환이 안내 뒤에 연결된 시도 하나(값은 가짜).
 _TRANSFER_CALL = {
     "callId": "CA00000000000000000000000000000001",
