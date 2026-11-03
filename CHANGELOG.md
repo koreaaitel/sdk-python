@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+- **control 연결이 다시 붙는 사이에 전환하면 `AttributeError` 가 나던 문제.** 연결이 끊겨 있으면 전환이 `AgentConnectionError`
+  (`AgentError` 계열)로 바로 실패합니다. 메시지는 `transfer 불가` 로 시작합니다. 전송 중 끊긴 경우도 같은 오류입니다
+  (종전에는 `aiohttp.ClientError`·`ConnectionResetError` 가 그대로 나갔습니다).
+
 ## 0.71.0 (2026-10-28)
 
 ### Fixed

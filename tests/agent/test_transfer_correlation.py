@@ -21,6 +21,7 @@ import json
 import aiohttp
 import pytest
 
+from clawops._exceptions import AgentConnectionError
 from clawops.agent import _control_ws as cw
 from clawops.agent._control_ws import ControlWebSocket
 
@@ -360,9 +361,45 @@ async def test_no_pending_left_after_send_failure():
         raise aiohttp.ClientError("socket gone")
 
     cws._ws.send_str = boom  # type: ignore[assignment,union-attr]
-    with pytest.raises(aiohttp.ClientError):
+    with pytest.raises(AgentConnectionError, match="transfer 불가"):
         await cws.request_transfer("CA1", {"to": "0101"})
 
+    assert cws._pending_transfers == {}
+    assert cws._pending_by_call == {}
+
+
+@pytest.mark.asyncio
+async def test_send_to_closing_transport_fails_clearly():
+    """aiohttp 는 닫히는 소켓에 쓰면 ConnectionResetError 계열을 던진다."""
+    cws = make_cws()
+
+    async def boom(_s: str) -> None:
+        raise ConnectionResetError("Cannot write to closing transport")
+
+    cws._ws.send_str = boom  # type: ignore[assignment,union-attr]
+    with pytest.raises(AgentConnectionError, match="transfer 불가"):
+        await cws.request_transfer("CA1", {"to": "0101"})
+
+    assert cws._pending_transfers == {}
+    assert cws._pending_by_call == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state", ["none", "closed"])
+async def test_transfer_without_connection_sends_nothing_and_leaves_no_pending(state: str):
+    """재연결 창(`_ws` None)과 닫히는 중(`closed`) 모두 대기를 만들기 전에 실패한다."""
+    cws = make_cws()
+    if state == "none":
+        cws._ws = None
+    else:
+        cws._ws.closed = True  # type: ignore[union-attr]
+
+    # 회귀하면 실패가 아니라 결과 대기(2시간)로 나타난다 — 명시적 실패로 만든다.
+    with pytest.raises(AgentConnectionError, match="transfer 불가"):
+        await asyncio.wait_for(cws.request_transfer("CA1", {"to": "0101"}), timeout=1)
+
+    if state == "closed":
+        assert cws._ws.sent == []  # type: ignore[union-attr]
     assert cws._pending_transfers == {}
     assert cws._pending_by_call == {}
 

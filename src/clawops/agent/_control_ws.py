@@ -14,7 +14,7 @@ from urllib.parse import quote
 
 import aiohttp
 
-from .._exceptions import AgentAuthRejectedError
+from .._exceptions import AgentAuthRejectedError, AgentConnectionError
 
 log = logging.getLogger("clawops.agent")
 
@@ -75,6 +75,8 @@ TRANSFER_RESULT_MAX_WAIT_S = 7200.0
 # 릴레이하므로(call-engine agent-gw-relay: await 없는 POST) call.ended 가 먼저 닿을 수 있다.
 # 순서를 보장하려 애쓰는 대신 이 유예로 흡수한다.
 TRANSFER_LATE_ARRIVAL_GRACE_S = 2.0
+
+TRANSFER_NO_CONNECTION_MESSAGE = "transfer 불가: control 연결이 끊겨 있다(재연결 중이거나 연결이 종료됐다)"
 
 
 def build_control_ws_url(
@@ -331,22 +333,34 @@ class ControlWebSocket:
         전환 통화가 끝날 때까지이며, 브리지 길이와 무관한 방어선
         (`TRANSFER_RESULT_MAX_WAIT_S`)만 둔다 — 서버가 결과 이벤트를 반드시 보낸다는 계약을
         신뢰하기 때문이다. 통화가 먼저 끝나면 종료 통지가 이 대기를 정리한다.
+
+        연결이 없으면 대기를 만들기 전에 ``AgentConnectionError`` 를 던진다. 끊긴 뒤 다시 붙기까지
+        (1초~) `_ws` 는 None 이고, 닫히는 중에는 객체만 남아 있다 — 이 객체는 재연결 내내 살아
+        있으므로 호출부의 `_control_ws is None` 검사로는 이 창을 막을 수 없다. 기다리지 않는 이유는
+        전환은 지금 통화 중인 고객을 옮기는 일이라, 언제 붙을지 모르는 연결에 묶어 두면 안 되기 때문이다.
         """
+        ws = self._ws
+        if ws is None or ws.closed:
+            raise AgentConnectionError(TRANSFER_NO_CONNECTION_MESSAGE)
         request_id = uuid.uuid4().hex
         future: asyncio.Future = asyncio.get_event_loop().create_future()
         self._pending_transfers[request_id] = future
         self._pending_by_call.setdefault(call_id, set()).add(request_id)
         try:
-            await self._ws.send_str(
-                json.dumps(
-                    {
-                        "event": "call.transfer",
-                        "callId": call_id,
-                        # 서버는 이 값을 해석하지 않고 결과 이벤트에 그대로 되돌린다.
-                        "transfer": {**transfer_params, "requestId": request_id},
-                    }
+            try:
+                await ws.send_str(
+                    json.dumps(
+                        {
+                            "event": "call.transfer",
+                            "callId": call_id,
+                            # 서버는 이 값을 해석하지 않고 결과 이벤트에 그대로 되돌린다.
+                            "transfer": {**transfer_params, "requestId": request_id},
+                        }
+                    )
                 )
-            )
+            except (aiohttp.ClientError, ConnectionError) as e:
+                # 위 검사와 전송 사이에 끊겼다. 서버는 이 요청을 받지 못했다.
+                raise AgentConnectionError(TRANSFER_NO_CONNECTION_MESSAGE) from e
             return await asyncio.wait_for(future, timeout=TRANSFER_RESULT_MAX_WAIT_S)
         except asyncio.TimeoutError:
             log.error(
