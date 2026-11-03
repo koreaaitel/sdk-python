@@ -12,6 +12,7 @@ throttle 이 번호를 분 단위로 격리한다. 그래서 "재연결했는가
 from __future__ import annotations
 
 import asyncio
+import json
 
 import pytest
 from aiohttp import web
@@ -27,6 +28,7 @@ from clawops.agent._control_ws import (
 class _Server:
     def __init__(self) -> None:
         self.accepted: list[web.WebSocketResponse] = []
+        self.received: list[str] = []
         self._runner: web.AppRunner | None = None
         self.port = 0
 
@@ -37,8 +39,8 @@ class _Server:
             ws = web.WebSocketResponse()
             await ws.prepare(request)
             self.accepted.append(ws)
-            async for _ in ws:
-                pass
+            async for msg in ws:
+                self.received.append(msg.data)
             return ws
 
         app.router.add_get("/v1/accounts/{account_id}/agent/listen", handler)
@@ -237,6 +239,7 @@ async def test_transfer_during_reconnect_window_fails_clearly_then_works_again()
         transfer = asyncio.create_task(ws.request_transfer("CA1", {"to": "01011112222"}))
         await asyncio.sleep(0.05)
         assert len(ws._pending_transfers) == 1
+        assert [json.loads(m)["event"] for m in server.received] == ["call.transfer"]
         await ws._dispatch(
             '{"event": "call.transfer.completed", "callId": "CA1", "transfer": {"status": "completed"}}'
         )

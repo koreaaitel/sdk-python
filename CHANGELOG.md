@@ -1,11 +1,12 @@
 # Changelog
 
-## Unreleased
+## 0.71.1 (2026-11-03)
 
 ### Fixed
 - **control 연결이 다시 붙는 사이에 전환하면 `AttributeError` 가 나던 문제.** 연결이 끊겨 있으면 전환이 `AgentConnectionError`
   (`AgentError` 계열)로 바로 실패합니다. 메시지는 `transfer 불가` 로 시작합니다. 전송 중 끊긴 경우도 같은 오류입니다
   (종전에는 `aiohttp.ClientError`·`ConnectionResetError` 가 그대로 나갔습니다).
+- **`AgentError`·`AgentConnectionError` 를 `clawops.agent` 에서 import 할 수 있습니다.** 종전에는 비공개 모듈 `clawops._exceptions` 에서만 가져올 수 있었습니다. 그 경로도 계속 됩니다.
 
 ## 0.71.0 (2026-10-28)
 
