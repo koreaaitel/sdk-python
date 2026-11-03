@@ -434,8 +434,7 @@ SDK 의 _active_sessions 에 callId 가 없습니다.
 ## 에러 처리
 
 ```python
-from clawops.agent import ClawOpsAgent, OpenAIRealtime
-from clawops._exceptions import AgentError, AgentConnectionError
+from clawops.agent import AgentConnectionError, AgentError, ClawOpsAgent, OpenAIRealtime
 import asyncio
 
 agent = ClawOpsAgent(

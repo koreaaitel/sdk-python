@@ -41,6 +41,7 @@ async def test_request_transfer_sends_message_and_waits():
     """request_transfer sends the correct JSON and resolves on completed."""
     cws = _make_control_ws()
     mock_ws = MagicMock()
+    mock_ws.closed = False
     mock_ws.send_str = AsyncMock()
     cws._ws = mock_ws
 

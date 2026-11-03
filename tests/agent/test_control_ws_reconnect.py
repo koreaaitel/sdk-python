@@ -12,10 +12,12 @@ throttle 이 번호를 분 단위로 격리한다. 그래서 "재연결했는가
 from __future__ import annotations
 
 import asyncio
+import json
 
 import pytest
 from aiohttp import web
 
+from clawops._exceptions import AgentError
 from clawops.agent._control_ws import (
     CLOSE_OWNERSHIP_LOST,
     CLOSE_REPLACED,
@@ -26,6 +28,7 @@ from clawops.agent._control_ws import (
 class _Server:
     def __init__(self) -> None:
         self.accepted: list[web.WebSocketResponse] = []
+        self.received: list[str] = []
         self._runner: web.AppRunner | None = None
         self.port = 0
 
@@ -36,8 +39,8 @@ class _Server:
             ws = web.WebSocketResponse()
             await ws.prepare(request)
             self.accepted.append(ws)
-            async for _ in ws:
-                pass
+            async for msg in ws:
+                self.received.append(msg.data)
             return ws
 
         app.router.add_get("/v1/accounts/{account_id}/agent/listen", handler)
@@ -197,6 +200,50 @@ async def test_agent_retired_event_enters_lame_duck_without_closing() -> None:
         assert retired == ["replaced"]
         assert ws.lame_duck is True
         assert not server.accepted[0].closed, "인계 통지에 연결을 끊으면 종료 이벤트를 못 받는다"
+    finally:
+        await ws.close()
+        task.cancel()
+        await server.stop()
+
+
+# ── 재연결 창의 전환 ───────────────────────────────────────────────────────
+# 끊긴 뒤 다시 붙기까지(1초~) `_ws` 는 None 이다. Agent 쪽 검사(`_control_ws is None`)는 객체가 살아
+# 있는 이 창을 못 막아, 전환이 사용자 툴 밖으로 맨 AttributeError 를 던졌다(clawops#1978 측정).
+
+
+async def test_transfer_during_reconnect_window_fails_clearly_then_works_again() -> None:
+    server = _Server()
+    await server.start()
+    ws = await _client(server)
+    task = asyncio.create_task(ws.connect())
+    try:
+        await ws.wait_connected(timeout=5)
+        await server.accepted[0].close(code=1001, message=b"gateway draining")
+        for _ in range(100):
+            if ws._ws is None:
+                break
+            await asyncio.sleep(0.01)
+        assert ws._ws is None, "재연결 창에 들어가지 못했다"
+
+        with pytest.raises(AgentError, match="transfer 불가"):
+            await asyncio.wait_for(ws.request_transfer("CA1", {"to": "01011112222"}), timeout=1)
+        assert ws._pending_transfers == {}
+        assert ws._pending_by_call == {}
+
+        # 창이 지나면 같은 객체로 전환이 다시 된다 — 실패가 연결 상태를 망가뜨리지 않았다.
+        # wait_connected() 는 여기서 못 쓴다 — 재연결 대기 중에도 이전 연결의 완료 표시가 남아 있다.
+        for _ in range(500):
+            if len(server.accepted) >= 2 and ws._ws is not None:
+                break
+            await asyncio.sleep(0.01)
+        transfer = asyncio.create_task(ws.request_transfer("CA1", {"to": "01011112222"}))
+        await asyncio.sleep(0.05)
+        assert len(ws._pending_transfers) == 1
+        assert [json.loads(m)["event"] for m in server.received] == ["call.transfer"]
+        await ws._dispatch(
+            '{"event": "call.transfer.completed", "callId": "CA1", "transfer": {"status": "completed"}}'
+        )
+        assert (await asyncio.wait_for(transfer, timeout=1))["status"] == "completed"
     finally:
         await ws.close()
         task.cancel()
