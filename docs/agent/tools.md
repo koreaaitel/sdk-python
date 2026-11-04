@@ -214,6 +214,8 @@ await call.transfer(
 )
 ```
 
+LiveKit 세션에서 모델이 내장 도구 `transfer_call` 을 `after_transfer="return"` 으로 부르면, 도구는 전환이 끝날 때까지 기다렸다가 결과(`status`·`message`)를 모델에게 돌려줍니다. 대상이 받지 않거나 통화 중이면 모델이 그 사실을 알고 대화를 이어 갑니다.
+
 ### 연결되지 않으면 안내하고 종료
 
 `after_transfer="terminate"`(기본값)에서 대상이 받지 않거나 통화 중이면, 고객은 지금까지
