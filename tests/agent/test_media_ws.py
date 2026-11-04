@@ -1,5 +1,7 @@
 # tests/agent/test_media_ws.py
+import asyncio
 import base64
+import json
 from unittest.mock import AsyncMock
 
 import pytest
@@ -217,3 +219,106 @@ async def test_connected_log_omits_token(monkeypatch, caplog):
     messages = [r.getMessage() for r in caplog.records]
     assert any("wss://api.claw-ops.com/v1/agent/media/CA1" in m for m in messages)
     assert not any("secret-token-123" in m or "token=" in m or "frag" in m for m in messages)
+
+
+# ── on_event ──
+
+
+async def _serve_messages(messages: list[dict]) -> tuple[object, str]:
+    """접속하면 messages 를 차례로 보내고 stop 으로 닫는 로컬 미디어 서버."""
+    from aiohttp import web
+
+    async def handler(request: web.Request) -> web.WebSocketResponse:
+        ws = web.WebSocketResponse()
+        await ws.prepare(request)
+        for message in messages:
+            await ws.send_str(json.dumps(message))
+        await ws.send_str(json.dumps({"event": "stop", "stop": {}}))
+        await ws.receive()
+        return ws
+
+    app = web.Application()
+    app.router.add_get("/media", handler)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 0)
+    await site.start()
+    port = site._server.sockets[0].getsockname()[1]
+    return runner, f"ws://127.0.0.1:{port}/media"
+
+
+TRANSFER_FAILED = {
+    "event": "call.transfer.failed",
+    "callId": "CA1",
+    "requestId": "r1",
+    "transfer": {"status": "no-answer"},
+}
+
+
+@pytest.mark.asyncio
+async def test_on_event_는_프로토콜_밖_메시지만_받는다():
+    runner, url = await _serve_messages(
+        [
+            {"event": "mark", "mark": {"name": "m"}},
+            TRANSFER_FAILED,
+            {"event": "dtmf", "dtmf": {"digit": "1"}},
+        ]
+    )
+    received: list[dict] = []
+    digits: list[str] = []
+    stopped = asyncio.Event()
+
+    async def on_event(data: dict) -> None:
+        received.append(data)
+
+    async def on_dtmf(digit: str) -> None:
+        digits.append(digit)
+
+    async def on_stop() -> None:
+        stopped.set()
+
+    mws = MediaWebSocket(
+        url=url, on_audio=None, on_start=None, on_stop=on_stop, on_dtmf=on_dtmf, on_event=on_event
+    )
+    try:
+        await asyncio.wait_for(mws.connect(), 5)
+    finally:
+        await runner.cleanup()
+    assert received == [TRANSFER_FAILED]
+    assert digits == ["1"]
+    assert stopped.is_set()
+
+
+@pytest.mark.asyncio
+async def test_on_event_가_없으면_모르는_메시지를_버린다():
+    runner, url = await _serve_messages([TRANSFER_FAILED])
+    stopped = asyncio.Event()
+
+    async def on_stop() -> None:
+        stopped.set()
+
+    mws = MediaWebSocket(url=url, on_audio=None, on_start=None, on_stop=on_stop)
+    try:
+        await asyncio.wait_for(mws.connect(), 5)
+    finally:
+        await runner.cleanup()
+    assert stopped.is_set()
+
+
+@pytest.mark.asyncio
+async def test_on_event_오류가_수신을_끊지_않는다():
+    runner, url = await _serve_messages([TRANSFER_FAILED])
+    stopped = asyncio.Event()
+
+    async def on_event(data: dict) -> None:
+        raise RuntimeError("boom")
+
+    async def on_stop() -> None:
+        stopped.set()
+
+    mws = MediaWebSocket(url=url, on_audio=None, on_start=None, on_stop=on_stop, on_event=on_event)
+    try:
+        await asyncio.wait_for(mws.connect(), 5)
+    finally:
+        await runner.cleanup()
+    assert stopped.is_set()

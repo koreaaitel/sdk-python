@@ -113,6 +113,7 @@ class MediaWebSocket:
         on_stop: Callable[[], Awaitable[None]],
         on_dtmf: Callable[[str], Awaitable[None]] | None = None,
         expected_media_profile: MediaProfile | None = None,
+        on_event: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
     ) -> None:
         self._expected_media_profile = (
             MediaProfile(expected_media_profile) if expected_media_profile is not None else None
@@ -125,6 +126,7 @@ class MediaWebSocket:
         self._on_start = on_start
         self._on_stop = on_stop
         self._on_dtmf = on_dtmf
+        self._on_event = on_event
         self._ws: aiohttp.ClientWebSocketResponse | None = None
         self._session: aiohttp.ClientSession | None = None
         self._audio_queue: asyncio.Queue[bytes | None] = asyncio.Queue()
@@ -176,10 +178,19 @@ class MediaWebSocket:
                     elif event == "stop":
                         await self._on_stop()
                         break
+                    elif self._on_event is not None:
+                        await self._dispatch_event(data)
                 elif msg.type in (aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.ERROR):
                     break
         finally:
             await self.close()
+
+    async def _dispatch_event(self, data: dict[str, Any]) -> None:
+        """위에서 처리하지 않은 다운링크 메시지를 넘긴다. 콜백 오류가 오디오 수신을 끊지 않게 삼킨다."""
+        try:
+            await self._on_event(data)
+        except Exception:  # noqa: BLE001
+            log.exception("Media WS on_event 처리 실패: %s", data.get("event"))
 
     async def send_audio(self, audio: bytes) -> None:
         self._last_audio_at = time.monotonic()

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.72.0 (2026-11-04)
+
+### Added
+- **`MediaWebSocket(on_event=...)`.** `start`·`media`·`dtmf`·`mark`·`stop` 이 아닌 메시지를 받는 콜백입니다. 지정하지 않으면 종전처럼 버립니다.
+
 ## 0.71.1 (2026-11-03)
 
 ### Fixed
