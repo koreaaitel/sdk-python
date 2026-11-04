@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from unittest.mock import AsyncMock
 
 import pytest
@@ -152,3 +153,96 @@ async def test_tool_before_call_bound_errors_cleanly() -> None:
     tools = ClawOpsPhoneTools()
     with pytest.raises(RuntimeError, match="연결되지 않았"):
         await tools._hang_up(None)
+
+
+# ── after_transfer="return" 은 결과를 돌려준다 ─────────────────
+
+
+class _Speech:
+    allow_interruptions = True
+
+
+class _Ctx:
+    def __init__(self) -> None:
+        self.speech_handle = _Speech()
+
+    def disallow_interruptions(self) -> None:
+        self.speech_handle.allow_interruptions = False
+
+
+async def test_transfer_return_waits_and_tells_the_model() -> None:
+    tools = ClawOpsPhoneTools()
+    call = _make_call()
+    result: asyncio.Future = asyncio.get_running_loop().create_future()
+
+    async def transfer(_payload: dict) -> dict:
+        return await result
+
+    call._transfer_fn = transfer
+    tools.set_call(call)
+    ctx = _Ctx()
+
+    task = asyncio.create_task(tools._transfer_call(ctx, to="01012345678", after_transfer="return"))
+    await asyncio.sleep(0.01)
+    assert not task.done()
+    assert ctx.speech_handle.allow_interruptions is False, "기다리는 동안 끼어들기를 막는다"
+
+    result.set_result({"status": "no-answer"})
+    body = json.loads(await task)
+    assert body["status"] == "no-answer"
+    assert "did not answer" in body["message"]
+    assert ctx.speech_handle.allow_interruptions is True, "이어받는 발화는 끊을 수 있어야 한다"
+
+
+async def test_transfer_return_failure_is_reported_as_error() -> None:
+    tools = ClawOpsPhoneTools()
+    call = _make_call()
+    call._transfer_fn = AsyncMock(side_effect=RuntimeError("boom"))
+    tools.set_call(call)
+    result = await tools._transfer_call(_Ctx(), to="01012345678", after_transfer="return")
+    assert result == "Error: boom"
+
+
+async def test_transfer_return_after_interruption_does_not_start() -> None:
+    class _Interrupted(_Ctx):
+        def disallow_interruptions(self) -> None:
+            raise RuntimeError("already interrupted")
+
+    tools = ClawOpsPhoneTools()
+    call = _make_call()
+    tools.set_call(call)
+    result = await tools._transfer_call(_Interrupted(), to="01012345678", after_transfer="return")
+    assert result.startswith("Error")
+    call._transfer_fn.assert_not_awaited()
+
+
+async def test_transfer_return_ending_call_skips_the_reply() -> None:
+    from livekit.agents.llm import StopResponse
+
+    tools = ClawOpsPhoneTools()
+    call = _make_call()
+    call._transfer_fn = AsyncMock(return_value={"status": "canceled"})
+    tools.set_call(call)
+    with pytest.raises(StopResponse):
+        await tools._transfer_call(_Ctx(), to="01012345678", after_transfer="return")
+
+
+async def test_transfer_return_connection_loss_restores_interruptions() -> None:
+    tools = ClawOpsPhoneTools()
+    call = _make_call()
+    never: asyncio.Future = asyncio.get_running_loop().create_future()
+
+    async def transfer(_payload: dict) -> dict:
+        return await never
+
+    lost: asyncio.Future = asyncio.get_running_loop().create_future()
+    call._transfer_fn = transfer
+    call._transfer_connection_lost_fn = lambda: lost
+    tools.set_call(call)
+    ctx = _Ctx()
+    task = asyncio.create_task(tools._transfer_call(ctx, to="010", after_transfer="return"))
+    await asyncio.sleep(0.01)
+    lost.set_result(None)
+    assert json.loads(await task)["status"] == "unknown"
+    assert ctx.speech_handle.allow_interruptions is True
+    never.cancel()

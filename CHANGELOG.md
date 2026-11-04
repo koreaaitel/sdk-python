@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.73.0 (2026-11-04)
+
+### Changed
+- **동작 변경: LiveKit 세션의 내장 도구 `transfer_call` 이 `after_transfer="return"` 이면 전환 결과를 돌려줍니다.** 전환이 끝날 때까지 기다렸다가 `{"status": ..., "message": ...}` 를 모델에 줍니다. 종전에는 `transfer_initiated` 를 바로 돌려줘, 대상이 받지 않아도 모델이 그 사실을 몰랐습니다. control 연결이 끊겨 결과를 알 수 없으면 `status` 가 `unknown` 입니다. `terminate` 와 자체 파이프라인·realtime 세션은 그대로입니다.
+
 ## 0.72.0 (2026-11-04)
 
 ### Added

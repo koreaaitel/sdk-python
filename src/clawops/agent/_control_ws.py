@@ -137,6 +137,7 @@ class ControlWebSocket:
         # 같은 통화에서 전환을 다시 타므로(서버 transfer-handler 주석: 실측 8회 재시도), callId 로
         # 키잉하면 2차 요청이 1차 대기를 덮어써 1차가 영영 resolve 되지 않는다.
         self._pending_transfers: dict[str, asyncio.Future] = {}  # requestId → future
+        self._connection_lost_waiters: set[asyncio.Future] = set()
         # callId → 그 통화에서 대기 중인 requestId 집합. 통화 종료 시 정리 대상을 찾고,
         # requestId 를 echo 하지 않는 구 서버의 이벤트를 매핑하는 폴백에 쓴다.
         self._pending_by_call: dict[str, set[str]] = {}
@@ -273,6 +274,7 @@ class ControlWebSocket:
                     )
                 log.warning(f"Control WS error: {type(e).__name__}: {e}")
             finally:
+                self._fire_connection_lost()
                 if self._ws and not self._ws.closed:
                     await self._ws.close()
                 if self._session:
@@ -325,6 +327,24 @@ class ControlWebSocket:
             "call.transfer.failed",
         ):
             self._on_transfer_event(data)
+
+    def connection_lost(self) -> asyncio.Future:
+        """지금 연결이 끊기면 완료되는 future. 이미 끊겨 있으면 완료된 채로 돌려준다.
+
+        결과 이벤트는 재전송되지 않으므로, 이 신호 뒤에는 대기 중인 결과가 안 올 수 있다.
+        """
+        future: asyncio.Future = asyncio.get_event_loop().create_future()
+        if self._ws is None or self._ws.closed:
+            future.set_result(None)
+            return future
+        self._connection_lost_waiters.add(future)
+        future.add_done_callback(self._connection_lost_waiters.discard)
+        return future
+
+    def _fire_connection_lost(self) -> None:
+        for future in list(self._connection_lost_waiters):
+            if not future.done():
+                future.set_result(None)
 
     async def request_transfer(self, call_id: str, transfer_params: dict) -> dict:
         """콜 전환을 요청하고 완료/실패 응답을 기다린다.
@@ -435,6 +455,7 @@ class ControlWebSocket:
 
     async def close(self) -> None:
         self._running = False
+        self._fire_connection_lost()
         for timer in self._cleanup_timers:
             timer.cancel()
         self._cleanup_timers.clear()

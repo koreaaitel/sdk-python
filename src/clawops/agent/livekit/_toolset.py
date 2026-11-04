@@ -20,11 +20,12 @@ import json
 import logging
 from typing import Any, Awaitable, Callable
 
-from livekit.agents.llm import ToolFlag, Toolset, function_tool
+from livekit.agents.llm import StopResponse, ToolFlag, Toolset, function_tool
 from livekit.agents.voice.events import RunContext
 
 from .._builtin_tools import BuiltinTool
 from .._session import CallSession, DtmfCollectorBusy
+from .._transfer_tool import TRANSFER_INITIATED, is_call_over, wait_for_transfer_result
 
 log = logging.getLogger("clawops.agent.livekit")
 
@@ -166,7 +167,8 @@ class ClawOpsPhoneTools(Toolset):
             to: 전환 대상. destination_type 이 'pstn' 이면 전화번호, 'sip' 이면 SIP URI.
             destination_type: pstn(기본, 통신사 경유) 또는 sip(SIP 직결)
             mode: blind(기본, 즉시 전환) 또는 warm(대상에게 whisper 후 연결)
-            after_transfer: terminate(기본, AI 세션 종료) 또는 return(전환 종료 후 AI 복귀)
+            after_transfer: terminate(기본, AI 세션 종료) 또는 return(전환 종료 후 AI 복귀,
+                이 도구가 전환 결과를 돌려준다)
             whisper: warm 모드에서 대상에게 먼저 들려줄 안내 문구
             caller_id_mode: 전환받는 쪽에 표시할 번호를 **의도**로 지정.
                 account(기본과 같음, 계정 번호) 또는 original(걸려온 통화의 발신자
@@ -197,6 +199,17 @@ class ClawOpsPhoneTools(Toolset):
         if not to.strip():
             return "Error: 'to' must not be empty"
 
+        # 결과를 기다리는 도구가 끼어들기로 취소되면 이어받을 때 할 말이 사라진다(LiveKit 은 끼어들기가
+        # 일어나면 실행 중인 도구를 취소한다). 도구가 끝나면 되돌린다 — 이어받는 발화는 끊을 수 있어야 한다.
+        returns = after_transfer == "return"
+        speech = ctx.speech_handle if returns and ctx is not None else None
+        allowed_before = speech.allow_interruptions if speech is not None else False
+        if speech is not None:
+            try:
+                ctx.disallow_interruptions()
+            except RuntimeError:
+                return "Error: 이미 끼어들기가 일어나 전환하지 않았습니다"
+
         coro = call.transfer(
             to=to,
             destination_type=destination_type,  # type: ignore[arg-type]
@@ -208,15 +221,32 @@ class ClawOpsPhoneTools(Toolset):
             timeout=timeout,
         )
 
-        # Fire-and-forget: call-engine 이 transfer 시작 시 media WS 를 닫으므로
-        # 결과를 await 하면 LLM 세션이 먼저 끊긴다.
         task = asyncio.ensure_future(coro)
+        # 실패가 도구 결과로 나가지 않는 경로(terminate·취소된 도구)에서도 로그에는 남긴다.
         task.add_done_callback(_log_transfer_result)
-        return json.dumps({"status": "transfer_initiated"})
+        # terminate 는 서버가 미디어 세션을 닫으므로 기다리면 세션이 먼저 끝난다. 즉시 반환한다.
+        if not returns:
+            return TRANSFER_INITIATED
+        lost_fn = call._transfer_connection_lost_fn
+        try:
+            result = await wait_for_transfer_result(
+                task,
+                call_ended=lambda: call.ended_status is not None,
+                connection_lost=lost_fn() if lost_fn is not None else None,
+            )
+        except Exception as e:  # noqa: BLE001 — 도구는 문자열로 실패를 알린다
+            return f"Error: {e}"
+        finally:
+            if allowed_before:
+                speech.allow_interruptions = True
+        # 통화가 끝났다 — 들을 사람이 없으니 모델 응답을 만들지 않는다.
+        if is_call_over(result):
+            raise StopResponse()
+        return result
 
 
 def _log_transfer_result(task: Any) -> None:
-    """fire-and-forget transfer 의 예외가 조용히 사라지지 않게 한다."""
+    """전환 태스크의 예외가 조용히 사라지지 않게 한다."""
     if task.cancelled():
         return
     exc = task.exception()

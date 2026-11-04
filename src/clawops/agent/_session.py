@@ -72,6 +72,8 @@ class CallSession:
 
         # Transfer
         self._transfer_fn: Callable[[dict], Awaitable[dict]] | None = None
+        # control 연결이 끊기면 완료되는 future 를 만든다. 전환 결과를 기다리는 도구가 쓴다.
+        self._transfer_connection_lost_fn: Callable[[], Any] | None = None
 
         # DTMF
         self._send_dtmf_fn: Callable[[str], Awaitable[None]] | None = None

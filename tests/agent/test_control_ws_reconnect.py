@@ -248,3 +248,32 @@ async def test_transfer_during_reconnect_window_fails_clearly_then_works_again()
         await ws.close()
         task.cancel()
         await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_connection_lost_future_fires_on_close() -> None:
+    async def _noop(_data: dict) -> None: ...
+
+    ws = ControlWebSocket(
+        base_url="https://example.invalid",
+        api_key="k",
+        account_id="AC",
+        number="070",
+        on_call_incoming=_noop,
+        on_call_ended=_noop,
+    )
+
+    class _Open:
+        closed = False
+
+        async def close(self) -> None:
+            self.closed = True
+
+    ws._ws = _Open()
+    lost = ws.connection_lost()
+    assert not lost.done()
+    await ws.close()
+    assert lost.done()
+
+    ws._ws = None
+    assert ws.connection_lost().done(), "이미 끊겨 있으면 바로 완료된다"

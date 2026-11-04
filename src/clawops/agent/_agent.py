@@ -1149,6 +1149,15 @@ class ClawOpsAgent:
                     )
                 return control_ws.request_transfer(call.call_id, params)
 
+            def transfer_connection_lost() -> asyncio.Future:
+                control_ws = self._control_ws
+                if control_ws is None:
+                    done: asyncio.Future = asyncio.get_running_loop().create_future()
+                    done.set_result(None)
+                    return done
+                return control_ws.connection_lost()
+
+            call._transfer_connection_lost_fn = transfer_connection_lost
             call.bind_transport(
                 send_audio=send_audio,
                 send_clear=media_ws.send_clear,
