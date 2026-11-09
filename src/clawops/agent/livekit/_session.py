@@ -74,6 +74,7 @@ class LiveKitSession:
         self._agent: Agent | None = None
         self._input: ClawOpsAudioInput | None = None
         self._output: ClawOpsAudioOutput | None = None
+        self._playout_gate: asyncio.Event | None = None
         self._toolset: ClawOpsPhoneTools | None = None
         self._target: Any = None  # CallSession | _BufferingCall
         self._user_tools: list[Any] = []  # 유저가 준 원본 도구 (우리 것 추가 전 스냅샷)
@@ -86,6 +87,16 @@ class LiveKitSession:
         self._emit_tasks: set[asyncio.Task[None]] = set()
         # 마지막으로 띄운 emit 태스크 — 다음 emit 은 이게 끝난 뒤에 핸들러를 부른다(_forward_event).
         self._emit_tail: asyncio.Task[None] | None = None
+
+    def set_playout_gate(self, gate: asyncio.Event | None) -> None:
+        """엔진이 보관 오디오를 내보내기 시작하는 순간 set 되는 이벤트를 단다.
+
+        관리형 발신처럼 상대가 받기 전에 인사를 만들어 두는 경우, 받기 전까지는 재생 완료 대기
+        시간을 세지 않는다(``ClawOpsAudioOutput.set_playout_gate``). 세션을 열기 전에 부른다.
+        """
+        self._playout_gate = gate
+        if self._output is not None:
+            self._output.set_playout_gate(gate)
 
     # ── ClawOpsAgent 가 duck-typing 으로 부르는 setter ──────────
 
@@ -196,6 +207,7 @@ class LiveKitSession:
 
         self._input = ClawOpsAudioInput(media_profile=self._media_profile)
         self._output = ClawOpsAudioOutput(target, pause=self._audio_pause, media_profile=self._media_profile)
+        self._output.set_playout_gate(self._playout_gate)
 
         # ⚠️ TranscriptSynchronizer 는 필수다. room 없이는 이걸 안 씌우면
         # barge-in 시 synchronized_transcript 가 None 이라 LLM 컨텍스트에
