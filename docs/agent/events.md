@@ -49,9 +49,9 @@ async def on_failed(call, reason):
 > `reason` 값은 `call.ended_status` 와 동일합니다. 자세한 의미는
 > [발신 결과 확인하기](quickstart.md#발신-결과-확인하기) 를 참고하세요.
 
-## 수신 통화 거절 — `@agent.on_incoming`
+## 수신 통화 거절·바로 넘기기 — `@agent.on_incoming`
 
-수신 통화를 **받기 전에** 보고 거절할 수 있습니다. 거절한 통화는 응답 전에 끝나므로 요금이 붙지 않고,
+수신 통화를 **받기 전에** 보고 거절하거나, AI 없이 다른 번호로 바로 넘길 수 있습니다. 거절한 통화는 응답 전에 끝나므로 요금이 붙지 않고,
 세션·미디어가 열리지 않으며 `call_start`/`call_end` 등 이벤트도 발화되지 않습니다.
 
 ```python
@@ -69,9 +69,29 @@ async def screen(call: IncomingCall):
 데코레이터 대신 `agent.on_incoming(screen)` 으로 등록해도 됩니다. 훅은 하나만 둘 수 있고, 다시 등록하면
 앞의 것을 바꿉니다. `async def` 와 일반 함수 둘 다 됩니다.
 
+### AI 없이 바로 넘기기 — `call.transfer()`
+
+지정한 발신자만 AI 가 받고, 나머지는 AI 안내 없이 상담 번호로 바로 연결할 때 씁니다.
+
+```python
+AI_TARGETS = {"01012345678", "01087654321"}
+
+@agent.on_incoming
+async def screen(call: IncomingCall):
+    if call.from_number not in AI_TARGETS:
+        await call.transfer("0212345678", caller_id_mode="original")
+```
+
+- AI 세션을 열지 않습니다. 첫 인사도, 모델 연결도 없고 발신자는 연결음을 듣습니다.
+- 통화가 연결되면 곧바로 전환합니다. `call_start`/`call_end` 등 이벤트는 발화되지 않습니다.
+- 인자는 [`call.transfer()`](#callsession) 와 같습니다. 단 AI 가 이어받을 수 없으므로 `mode="blind"`·
+  `after_transfer="terminate"` 로 고정됩니다. 대상이 받지 않으면 `failure_message` 를 들려주고 끊습니다.
+- 번호 오류 등으로 전환을 시작하지 못하면 통화를 끊습니다.
+- 받은 통화이므로 전환 전 통화 시간과 전환 통화 요금이 붙습니다.
+
 ### `IncomingCall`
 
-`CallSession` 이 아닙니다 — 받기 전이라 오디오를 보내거나 통화를 전환할 수 없습니다.
+`CallSession` 이 아닙니다 — 받기 전이라 오디오를 보낼 수 없습니다.
 
 | 속성·메서드 | 타입 | 설명 |
 |-------------|------|------|
@@ -80,19 +100,21 @@ async def screen(call: IncomingCall):
 | `to_number` | `str` | 수신 번호(이 에이전트의 번호) |
 | `caller_id_restricted` | `bool` | 발신자가 번호 표시제한을 걸고 건 통화면 `True` |
 | `reject(reason="rejected")` | | 거절합니다. `reason` 은 `"rejected"`(기본, SIP 403) 또는 `"busy"`(SIP 486). 그 밖의 값은 `ValueError` |
+| `transfer(to, ...)` | | AI 없이 받아서 `to` 로 넘깁니다. 위 절 참고 |
 
 ### 결정 규칙
 
 | 훅의 결과 | 처리 |
 |-----------|------|
 | `reject()` 호출 | 그 즉시 거절합니다. 훅이 뒤에 더 일해도 기다리지 않습니다 |
+| `transfer()` 호출 | 그 즉시 받아서 넘깁니다. 훅이 뒤에 더 일해도 기다리지 않습니다 |
 | `reject()` 없이 끝남 | 받습니다 (훅이 없을 때와 같음) |
 | 예외 발생 | 경고 로그를 남기고 **받습니다** |
 | 5초 안에 결정 없음 | 경고 로그를 남기고 **받습니다**. 그 뒤의 `reject()` 는 경고만 남기고 무시됩니다 |
 | 훅 등록 안 함 | 지금까지와 똑같이 받습니다 |
 
 선별 코드에 문제가 생겨도 전화를 놓치지 않도록, 결정하지 못한 통화는 받는 쪽으로 처리합니다.
-`reject()` 를 두 번 불러도 첫 결정이 유지됩니다. 훅이 도는 사이 발신자가 끊으면 아무 일도 하지 않습니다.
+`reject()`·`transfer()` 는 먼저 부른 것만 효과가 있습니다. 훅이 도는 사이 발신자가 끊으면 아무 일도 하지 않습니다.
 
 ## CallSession
 

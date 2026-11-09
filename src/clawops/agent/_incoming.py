@@ -7,6 +7,10 @@
 
 ``IncomingCall`` 은 ``CallSession`` 이 **아니다**. 세션은 수락한 뒤에야 만들어진다 — 거절한
 통화에는 세션도, 미디어도, ``session_setup`` 도 없다.
+
+훅이 ``transfer(to)`` 를 부르면 AI 없이 받아서 곧바로 ``to`` 로 넘긴다. AI 세션은 열지 않는다
+(첫 인사도, 모델 연결도 없다). 서버는 미디어가 붙은 뒤에야 통화를 받으므로 SDK 가 미디어만
+붙이고, 발신자 음성이 흐르기 시작하면(=서버가 받았다) 전환을 요청한다.
 """
 
 from __future__ import annotations
@@ -14,6 +18,8 @@ from __future__ import annotations
 import logging
 from collections.abc import Generator
 from typing import Any, Literal
+
+from ._session import build_transfer_payload
 
 log = logging.getLogger("clawops.agent")
 
@@ -58,6 +64,7 @@ class IncomingCall:
         "_closed",
         "_on_decide",
         "_reason",
+        "_transfer",
         "call_id",
         "caller_id_restricted",
         "forwarded_from",
@@ -80,6 +87,8 @@ class IncomingCall:
         self.caller_id_restricted = caller_id_restricted
         self.forwarded_from = forwarded_from
         self._reason: str | None = None
+        # transfer() 로 정한 전환 요청 본문. reject 와 둘 중 먼저 정한 것만 남는다.
+        self._transfer: dict[str, Any] | None = None
         # 결정 시한이 지났다 — 이미 수락(또는 거절)을 보냈으므로 더는 바꿀 수 없다.
         self._closed = False
         # 결정 즉시 에이전트를 깨우는 콜백(훅이 끝나기를 기다리지 않는다).
@@ -93,6 +102,64 @@ class IncomingCall:
     @property
     def reject_reason(self) -> RejectReason | None:
         return self._reason  # type: ignore[return-value]
+
+    @property
+    def transfer_request(self) -> dict[str, Any] | None:
+        """``transfer()`` 가 시한 안에 불렸으면 서버에 보낼 전환 요청 본문, 아니면 ``None``."""
+        return self._transfer
+
+    def _decided(self) -> bool:
+        return self._reason is not None or self._transfer is not None
+
+    def transfer(
+        self,
+        to: str,
+        *,
+        destination_type: Literal["pstn", "sip"] = "pstn",
+        caller_id: str | None = None,
+        caller_id_mode: Literal["account", "original"] | None = None,
+        timeout: int = 30,
+        hold_media: str = "ringback",
+        whisper: str | None = None,
+        context: dict | None = None,
+        failure_message: str | None = None,
+        failure_voice: str | None = None,
+    ) -> _Done:
+        """AI 없이 받아서 곧바로 ``to`` 로 넘긴다. ``await call.transfer("0212345678")`` 로 부른다.
+
+        - AI 세션을 열지 않는다. 발신자는 AI 인사 없이 연결음을 듣는다.
+        - 이 통화에는 ``call_start`` 등 통화 이벤트가 없다(AI 세션이 없으므로).
+        - 인자는 ``CallSession.transfer`` 와 같다. 넘긴 뒤 AI 가 이어받을 수 없으므로
+          ``mode="blind"``·``after_transfer="terminate"`` 로 고정한다. 대상이 받지 않으면
+          ``failure_message`` 를 들려주고 끊는다(없으면 그냥 끊는다).
+        - ``reject()`` 와 둘 중 먼저 부른 것만 효과가 있다. 결정 시한(5초)이 지나면 무시된다.
+        """
+        payload = build_transfer_payload(
+            to,
+            destination_type=destination_type,
+            mode="blind",
+            after_transfer="terminate",
+            hold_media=hold_media,
+            whisper=whisper,
+            context=context,
+            caller_id=caller_id,
+            caller_id_mode=caller_id_mode,
+            timeout=timeout,
+            failure_message=failure_message,
+            failure_voice=failure_voice,
+        )
+        if self._closed:
+            log.warning(
+                "IncomingCall.transfer() — 결정 시한이 지나 이미 처리된 통화입니다(무시): %s",
+                self.call_id,
+            )
+            return _Done()
+        if self._decided():
+            return _Done()
+        self._transfer = payload
+        if self._on_decide is not None:
+            self._on_decide()
+        return _Done()
 
     def reject(self, reason: RejectReason = "rejected") -> _Done:
         """이 통화를 받지 않고 거절한다. ``await call.reject()`` 로 부른다.
@@ -111,7 +178,7 @@ class IncomingCall:
                 self.call_id,
             )
             return _Done()
-        if self._reason is not None:
+        if self._decided():
             return _Done()
         self._reason = reason
         if self._on_decide is not None:

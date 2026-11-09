@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.74.0 (2026-11-09)
+
+### Added
+- **`IncomingCall.transfer(to, ...)` — `on_incoming` 에서 AI 없이 받아 바로 넘깁니다.** AI 세션을 열지 않으므로 첫 인사·모델 연결이 없고, 발신자는 연결음을 듣습니다. 통화가 연결되면 곧바로 전환합니다. 인자는 `call.transfer()` 와 같고 `mode="blind"`·`after_transfer="terminate"` 로 고정됩니다. 지정한 발신자만 AI 가 받고 나머지는 상담 번호로 보낼 때 씁니다. 이 통화에는 `call_start`/`call_end` 등 이벤트가 없습니다.
+
 ## 0.73.0 (2026-11-04)
 
 ### Changed
