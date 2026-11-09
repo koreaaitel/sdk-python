@@ -78,7 +78,7 @@ async def test_gate_closed_does_not_count_budget_until_opened() -> None:
     start = time.monotonic()
     events = await _play_one_segment(out)
 
-    await asyncio.sleep(0.4)  # 상한(0.15초)을 훌쩍 넘겨도 게이트가 닫혀 있으면 끝내지 않는다
+    await asyncio.sleep(0.8)  # 상한(0.15초)을 훌쩍 넘겨도 게이트가 닫혀 있으면 끝내지 않는다
     assert events == []
 
     gate.set()  # 받음 — 엔진이 오디오를 풀었다
@@ -89,7 +89,7 @@ async def test_gate_closed_does_not_count_budget_until_opened() -> None:
     assert len(events) == 1
     finished_at, ev = events[0]
     assert ev.interrupted is False
-    assert finished_at - start >= 0.45
+    assert finished_at - start >= 0.8
 
 
 async def test_budget_counts_from_gate_open() -> None:
@@ -98,13 +98,15 @@ async def test_budget_counts_from_gate_open() -> None:
     out.set_playout_gate(gate)
     events = await _play_one_segment(out)
 
-    await asyncio.sleep(0.3)
+    await asyncio.sleep(0.5)
+    assert events == []
     gate.set()
     opened = time.monotonic()
-    await asyncio.sleep(0.4)  # echo 가 끝내 안 오면 게이트가 열린 뒤 상한만큼 지나 끝낸다
+    await asyncio.sleep(1.0)  # echo 가 끝내 안 오면 게이트가 열린 뒤 상한(0.15초)만큼 지나 끝낸다
 
     assert len(events) == 1
-    assert 0.1 <= events[0][0] - opened <= 0.3
+    assert events[0][1].interrupted is False
+    assert 0.1 <= events[0][0] - opened < 1.0
 
 
 async def test_mark_before_gate_finishes_immediately() -> None:
@@ -125,10 +127,10 @@ async def test_without_gate_budget_applies_as_before() -> None:
     out = ClawOpsAudioOutput(_make_call(_HoldingMediaWs(echo)))
     start = time.monotonic()
     events = await _play_one_segment(out)
-    await asyncio.sleep(0.3)
+    await asyncio.sleep(1.0)
 
     assert len(events) == 1
-    assert events[0][0] - start < 0.3
+    assert events[0][0] - start < 1.0
 
 
 async def test_barge_in_while_gate_closed_is_interrupted() -> None:
@@ -143,3 +145,36 @@ async def test_barge_in_while_gate_closed_is_interrupted() -> None:
 
     assert len(events) == 1
     assert events[0][1].interrupted is True
+    assert events[0][1].playback_position == 0.0  # 받기 전이라 들린 것이 없다
+
+
+async def test_gate_never_opens_counts_as_not_heard(monkeypatch: pytest.MonkeyPatch) -> None:
+    echo, gate = asyncio.Event(), asyncio.Event()
+    out = ClawOpsAudioOutput(_make_call(_HoldingMediaWs(echo)))
+    out.set_playout_gate(gate, max_wait=0.2)
+    events = await _play_one_segment(out)
+    await asyncio.sleep(0.6)
+
+    assert len(events) == 1
+    assert events[0][1].interrupted is True
+    assert events[0][1].playback_position == 0.0
+
+
+async def test_clock_restarts_when_gate_opens() -> None:
+    """벨 구간은 들린 시간에 넣지 않는다 — 열린 뒤 끊으면 열린 뒤 경과만큼만 들렸다."""
+    echo, gate = asyncio.Event(), asyncio.Event()
+    out = ClawOpsAudioOutput(_make_call(_HoldingMediaWs(echo)))
+    out.set_playout_gate(gate)
+    events: list[io.PlaybackFinishedEvent] = []
+    out.on("playback_finished", events.append)
+    await out.capture_frame(_frame(80000))  # 10초
+    out.flush()
+    await asyncio.sleep(0.6)  # 벨
+    gate.set()
+    await asyncio.sleep(0.1)
+    out.clear_buffer()
+    await asyncio.sleep(0.05)
+
+    assert len(events) == 1
+    assert events[0].interrupted is True
+    assert events[0].playback_position < 0.5

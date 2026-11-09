@@ -171,6 +171,8 @@ class LiveKitSession:
         if self._input is not None:
             self._input.end_input()
         await self._close_agent_session()
+        # 게이트는 통화 하나의 것이다 — 이 객체가 다음 통화에 다시 쓰여도 넘어가지 않게 지운다.
+        self._playout_gate = None
 
     async def _close_agent_session(self) -> None:
         """현재 AgentSession + 출력 태스크를 정리한다.

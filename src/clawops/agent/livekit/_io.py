@@ -191,19 +191,38 @@ class ClawOpsAudioOutput(io.AudioOutput):
         self._bg_tasks: set[asyncio.Task[None]] = set()
         # 재생 게이트 — set 되기 전에는 엔진이 오디오를 내보내지 않는다(set_playout_gate).
         self._playout_gate: asyncio.Event | None = None
+        self._playout_gate_max_wait = _PLAYOUT_GATE_MAX_WAIT_S
+        self._gate_expired = False  # 게이트가 끝내 안 열려 mark 대기를 접었다
 
-    def set_playout_gate(self, gate: asyncio.Event | None) -> None:
+    def set_playout_gate(
+        self, gate: asyncio.Event | None, *, max_wait: float = _PLAYOUT_GATE_MAX_WAIT_S
+    ) -> None:
         """엔진이 보관 중인 오디오를 **언제 실제로 내보내기 시작하는지** 알리는 이벤트를 단다.
 
         관리형 발신은 상대가 받기 전에 인사를 만들어 두고, 엔진이 받은 뒤 그 오디오(와 그 뒤의
         mark)를 함께 푼다. 그 사이 mark 대기에 「오디오 길이 + 여유」 상한을 그대로 걸면 벨이 길 때
         mark 가 오기 전에 시간이 다 돼 인사를 「다 말했다」고 판단한다 — 「첫 인사는 끝까지 말하기」가
-        인사가 들리기도 전에 풀린다(CASE-2026-004501). 게이트가 열리기 전에는 상한을 세지 않는다.
+        인사가 들리기도 전에 풀린다(CASE-2026-004501). 그래서 게이트가 열리기 전에는:
+
+        - mark 대기 상한을 세지 않는다(``max_wait`` 까지). 끝내 안 열리면 「들리지 않음」(끊김)으로 본다.
+        - 들린 위치는 0 이다. 열리는 순간 들린 위치를 재는 시계를 그 시각으로 옮긴다.
 
         ``None`` 이거나 이미 set 이면 종전과 같다. mark 가 게이트보다 먼저 오면(보관하지 않는 엔진)
         그대로 재생 완료로 본다.
         """
         self._playout_gate = gate
+        self._playout_gate_max_wait = max_wait
+        if gate is not None and not gate.is_set():
+            self._spawn(self._restart_clock_when_open(gate))
+
+    async def _restart_clock_when_open(self, gate: asyncio.Event) -> None:
+        await gate.wait()
+        if gate is self._playout_gate and self._playing and not self._paused:
+            # 시작 바이트(_origin_bytes)는 _pump 가 정한 그대로 — 그 자리부터 지금 들리기 시작한다.
+            self._origin_time = time.monotonic()
+
+    def _gate_closed(self) -> bool:
+        return self._playout_gate is not None and not self._playout_gate.is_set()
 
     def set_call(self, call: Any) -> None:
         """attach() 시 실제 CallSession 으로 교체 (prewarm -> 실제 통화).
@@ -329,8 +348,8 @@ class ClawOpsAudioOutput(io.AudioOutput):
         """지금까지 상대에게 들렸을 바이트 수(추정). 일시정지 중엔 멈춘 자리."""
         if self._paused:
             return self._pause_pos
-        if not self._playing:
-            return 0
+        if not self._playing or self._gate_closed():
+            return 0  # 게이트가 닫혀 있으면 엔진이 아직 아무것도 내보내지 않았다
         elapsed = int((time.monotonic() - self._origin_time) * self._profile.bytes_per_second)
         played = max(0, min(self._sent, self._origin_bytes + elapsed))
         return played // self._profile.bytes_per_sample * self._profile.bytes_per_sample
@@ -378,35 +397,36 @@ class ClawOpsAudioOutput(io.AudioOutput):
             self._resumed_ev.set()
 
     async def _wait_mark(self, ws: Any, name: str) -> None:
-        """mark echo 를 기다린다. 재생 게이트가 닫혀 있으면 열린 뒤부터 상한을 센다(set_playout_gate)."""
+        """mark echo 를 기다린다. 재생 게이트가 닫혀 있으면 열린 뒤부터 상한을 센다(set_playout_gate).
+
+        게이트가 ``max_wait`` 안에 끝내 안 열리면 ``_gate_expired`` 를 세운다 — 호출자가 끊김으로 본다.
+        """
         budget = self._pushed_duration + _MARK_TIMEOUT_MARGIN
         gate = self._playout_gate
-        if gate is None or gate.is_set():
-            await ws.wait_for_mark(name, timeout=budget)
-            return
-        # 받기 전 — 엔진이 오디오와 mark 를 보관 중이다. mark 대기는 지금 걸어 둔다(먼저 오면 그걸로 끝).
-        mark_task = asyncio.ensure_future(ws.wait_for_mark(name, timeout=_PLAYOUT_GATE_MAX_WAIT_S + budget))
-        gate_task = asyncio.ensure_future(gate.wait())
+        max_wait = self._playout_gate_max_wait
+        mark_task = asyncio.ensure_future(ws.wait_for_mark(name, timeout=max_wait + budget))
         try:
-            done, _ = await asyncio.wait(
-                {mark_task, gate_task},
-                timeout=_PLAYOUT_GATE_MAX_WAIT_S,
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-            if mark_task in done:
-                return
-            # 지금부터 실제로 들리기 시작한다 — 들린 위치 추정 기준점도 여기로(set_call 과 같은 이유).
-            if gate_task in done and self._playing and not self._paused:
-                self._origin_bytes = 0
-                self._origin_time = time.monotonic()
+            if gate is not None and not gate.is_set():
+                # 받기 전 — 엔진이 오디오와 mark 를 보관 중이다. mark 가 먼저 오면 그걸로 끝.
+                gate_task = asyncio.ensure_future(gate.wait())
+                try:
+                    await asyncio.wait(
+                        {mark_task, gate_task}, timeout=max_wait, return_when=asyncio.FIRST_COMPLETED
+                    )
+                finally:
+                    gate_task.cancel()
+                if mark_task.done():
+                    return
+                if not gate.is_set():
+                    self._gate_expired = True
+                    return
             try:
                 await asyncio.wait_for(asyncio.shield(mark_task), timeout=budget)
             except asyncio.TimeoutError:
                 pass
         finally:
-            for task in (mark_task, gate_task):
-                if not task.done():
-                    task.cancel()
+            if not mark_task.done():
+                mark_task.cancel()
 
     async def _race_interrupt(self, awaitable: Any) -> bool:
         """`awaitable` 과 barge-in 중 먼저 오는 걸 기다린다. 반환: awaitable 이 이겼는가.
@@ -508,8 +528,11 @@ class ClawOpsAudioOutput(io.AudioOutput):
                 await ws.send_mark(mark_name)
 
             # mark echo(재생 완료)와 barge-in 중 먼저 오는 것을 기다린다.
+            self._gate_expired = False
             if not await self._race_interrupt(self._wait_mark(ws, mark_name)):
                 return True
+            if self._gate_expired:
+                return True  # 끝내 내보내지 않았다 — 들린 것이 없다
             if gen != self._mark_gen or self._paused:
                 # pause 의 clear 가 되돌려 준 옛 mark — 재생 완료가 아니다. 재개 후 다시 건다.
                 continue
