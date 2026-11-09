@@ -45,7 +45,8 @@ jobs:
 
   import-py39:
     name: import (3.9 하한)
-    runs-on: ubuntu-latest
+    # ubuntu-latest(26.04) 이미지에는 setup-python 이 3.9 를 받을 수 없다 — 3.9 가 있는 이미지로 고정한다.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
