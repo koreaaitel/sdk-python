@@ -14,7 +14,7 @@ import time
 import inspect
 from typing import Any, Awaitable, Callable, Literal, TypedDict, TypeVar, Union
 
-from .._exceptions import AgentAuthRejectedError, AgentError
+from .._exceptions import AgentAuthRejectedError, AgentConnectionError, AgentError
 from ._builtin_tools import BuiltinTool, resolve_builtin_tools
 from ._control_ws import CLOSE_REPLACED, ControlWebSocket
 from ._health import start_health_server
@@ -48,6 +48,15 @@ log = logging.getLogger("clawops.agent")
 #    닫기 **전에** 보내게 되면 이 대기는 통째로 필요 없어진다. 다만 그때도 구 서버가 남아
 #    있는 동안은 유지해야 한다 — 버전 협상이 없어 "모두 새 서버" 를 확신할 방법이 없다.
 TERMINAL_FRAME_GRACE_S = 2.0
+
+# IncomingCall.transfer() — AI 없이 받아 곧바로 넘기는 통화.
+# 서버는 미디어 WS 가 붙은 뒤 통화를 받는다. 받은 뒤에야 발신자 음성이 흐르므로 첫 프레임을 신호로 쓴다.
+TRANSFER_ONLY_ANSWER_WAIT_S = 10.0
+# 받기와 전환 가능 상태 등록 사이의 짧은 틈에 걸린 거절(NO_SESSION)을 다시 시도하는 기간·간격.
+TRANSFER_ONLY_RETRY_S = 5.0
+TRANSFER_ONLY_RETRY_INTERVAL_S = 0.2
+# 서버의 NO_SESSION 거절 사유(call-engine transfer-handler `_assertMediaSession`).
+NO_MEDIA_SESSION_REASON = "No active media session"
 
 # drain() 이 진행 중 통화를 기다리는 기본 상한(초). **기본은 무한이다.**
 #
@@ -223,6 +232,8 @@ class ClawOpsAgent:
         self._incoming_hook_deadline_s = INCOMING_HOOK_DEADLINE_S
         # 선별 중인 통화. 그 사이 서버가 call.ended 를 보내면(발신자가 끊음) 여기서 표시한다.
         self._screening: dict[str, bool] = {}
+        # IncomingCall.transfer() 로 받은 통화의 task — 참조를 쥐고 있어야 GC 되지 않는다.
+        self._transfer_only_tasks: set[asyncio.Task[None]] = set()
         self._active_sessions: dict[str, CallSession] = {}
         # 미디어 정리를 마친 통화가 서버 종료 프레임을 기다리는 자리. call_id → Event.
         self._terminal_waiters: dict[str, asyncio.Event] = {}
@@ -909,7 +920,129 @@ class ClawOpsAgent:
             # 선별하는 사이 발신자가 끊었다 — 수락할 통화가 없다.
             log.info(f"Incoming call ended during on_incoming screening: {call_id}")
             return
+        if incoming.transfer_request is not None:
+            await self._accept_for_transfer(data, incoming.transfer_request)
+            return
         await self._accept_incoming(data)
+
+    async def _accept_for_transfer(self, data: dict[str, Any], transfer: dict[str, Any]) -> None:
+        """``IncomingCall.transfer()`` — AI 세션 없이 받아서 곧바로 넘긴다.
+
+        Session 은 열지 않는다(``_open_session`` 을 부르지 않는다). 통화 이벤트(``call_start`` 등)도
+        없다. 서버의 ``call.ended`` 가 상태를 채울 수 있게 ``_active_sessions`` 에만 올린다.
+        """
+        call_id = data["callId"]
+        call = CallSession(
+            call_id=call_id,
+            from_number=data.get("from", ""),
+            to_number=self._from_number,
+            account_id=self._account_id,
+            direction="inbound",
+            caller_id_restricted=data.get("callerIdRestricted") is True,
+            forwarded_from=_read_forwarded_from(data),
+        )
+        log.info(f"Incoming call → transfer without AI: {call.from_number} -> {transfer.get('to')} ({call_id})")
+        self._active_sessions[call_id] = call
+        if self._control_ws:
+            await self._control_ws.send({"event": "call.accept", "callId": call_id})
+        task = asyncio.create_task(self._run_transfer_only(call, data.get("mediaUrl", ""), transfer))
+        self._transfer_only_tasks.add(task)
+        task.add_done_callback(self._transfer_only_tasks.discard)
+
+    async def _run_transfer_only(self, call: CallSession, media_url: str, transfer: dict[str, Any]) -> None:
+        """미디어만 붙이고, 서버가 통화를 받으면(발신자 음성이 흐르면) 전환을 요청한다.
+
+        서버는 미디어 WS 가 붙은 **뒤에** 통화를 받고 전환 가능한 상태(mediaSession)를 만든다.
+        그 전의 전환은 ``No active media session`` 으로 거절되므로 첫 음성 프레임을 기다리고,
+        그래도 거절되면 짧게 다시 시도한다.
+
+        요청이 나간 뒤에는 SDK 가 통화를 끊지 않는다 — 전환·실패 안내·종료는 서버 몫이고, 끝나면
+        서버가 미디어를 닫는다. SDK 가 끊는 경우는 둘뿐이다: 요청을 아예 보내지 못했을 때, 그리고
+        시작 전 거절(사유가 있는 failed: 번호 오류 등)이라 서버가 통화를 그대로 두었을 때.
+        그동안 ``_active_sessions`` 에 남아 있으므로 drain 은 이 통화가 끝나기를 기다린다.
+        """
+        answered = asyncio.Event()
+
+        async def on_audio(_ulaw: bytes, _ts: int) -> None:
+            answered.set()
+
+        async def on_start(_info: dict[str, Any]) -> None:
+            log.info(f"Media stream started (transfer only): {call.call_id}")
+
+        async def on_stop() -> None:
+            log.info(f"Media stream stopped (transfer only): {call.call_id}")
+
+        media_ws = MediaWebSocket(url=media_url, on_audio=on_audio, on_start=on_start, on_stop=on_stop)
+        conn = asyncio.create_task(media_ws.connect())
+        hang_up = False
+        try:
+            waiter = asyncio.create_task(answered.wait())
+            try:
+                done, _ = await asyncio.wait(
+                    {conn, waiter}, timeout=TRANSFER_ONLY_ANSWER_WAIT_S, return_when=asyncio.FIRST_COMPLETED
+                )
+            finally:
+                waiter.cancel()
+            if conn in done:
+                exc = conn.exception() if not conn.cancelled() else None
+                if exc is not None:
+                    log.error(f"transfer-only: 미디어 연결 실패: {call.call_id} ({type(exc).__name__}: {exc})")
+                else:
+                    log.info(f"전환 전에 미디어가 닫혔다(발신자가 끊음 등): {call.call_id}")
+                return
+            if not done:
+                log.warning(
+                    f"{TRANSFER_ONLY_ANSWER_WAIT_S:.0f}초 안에 발신자 음성이 오지 않았다 — 그대로 전환을 시도한다: {call.call_id}"
+                )
+
+            deadline = time.monotonic() + TRANSFER_ONLY_RETRY_S
+            while True:
+                control_ws = self._control_ws
+                if control_ws is None:
+                    log.error(f"전환 불가 — control 연결이 없다. 통화를 끊는다: {call.call_id}")
+                    hang_up = True
+                    return
+                req = asyncio.create_task(control_ws.request_transfer(call.call_id, transfer))
+                try:
+                    await asyncio.wait({req, conn}, return_when=asyncio.FIRST_COMPLETED)
+                except asyncio.CancelledError:
+                    req.cancel()
+                    raise
+                if not req.done():
+                    # 서버가 미디어를 닫았다 = 전환이 시작돼 AI 자리가 빠졌거나 통화가 끝났다. 남은 일은 서버 몫이다.
+                    req.cancel()
+                    await asyncio.gather(req, return_exceptions=True)
+                    log.info(f"transfer-only: 미디어 종료 — 전환은 서버가 이어간다: {call.call_id}")
+                    return
+                if req.cancelled() or not isinstance(req.exception(), (type(None), AgentConnectionError)):
+                    # 요청은 나갔는데 control 연결이 끊겨 결과를 못 받았다(drain·재연결). 서버 쪽 전환은 계속된다.
+                    log.warning(f"transfer-only: 전환 결과를 받지 못했다 — 서버가 끝내기를 기다린다: {call.call_id}")
+                    break
+                if isinstance(req.exception(), AgentConnectionError):
+                    log.error(f"transfer-only: 전환 요청을 보내지 못했다 — 통화를 끊는다: {call.call_id}")
+                    hang_up = True
+                    return
+                result = req.result()
+                reason = str(result.get("reason") or "")
+                if result.get("status") == "failed" and NO_MEDIA_SESSION_REASON in reason and time.monotonic() < deadline:
+                    await asyncio.sleep(TRANSFER_ONLY_RETRY_INTERVAL_S)
+                    continue
+                log.info(f"전환 결과: {call.call_id} {result}")
+                if result.get("status") == "failed" and reason:
+                    # 시작도 못 한 거절(번호 오류·발신번호 거절 등) — 서버는 통화를 그대로 둔다. 무음으로 남기지 않는다.
+                    hang_up = True
+                    return
+                break
+            # 서버가 끝내고 미디어를 닫을 때까지 기다린다(실패 안내 재생 포함). 우리가 먼저 닫지 않는다.
+            await asyncio.gather(conn, return_exceptions=True)
+        finally:
+            if hang_up and not conn.done():
+                # 미디어 WS 를 닫으면 서버가 발신자 채널을 끊는다(보낼 음성이 없으니 drain 할 것도 없다).
+                await media_ws.close()
+            if not conn.done():
+                conn.cancel()
+            await asyncio.gather(conn, return_exceptions=True)
+            self._active_sessions.pop(call.call_id, None)
 
     async def _run_incoming_hook(self, incoming: IncomingCall) -> str | None:
         """훅을 돌려 거절 사유를 돌려준다. 수락이면 None.

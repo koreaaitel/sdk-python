@@ -26,6 +26,49 @@ class DtmfCollectorBusy(RuntimeError):
     """
 
 
+def build_transfer_payload(
+    to: str,
+    *,
+    destination_type: Literal["pstn", "sip"] = "pstn",
+    mode: str = "blind",
+    after_transfer: str = "terminate",
+    hold_media: str = "ringback",
+    whisper: str | None = None,
+    context: dict | None = None,
+    caller_id: str | None = None,
+    caller_id_mode: Literal["account", "original"] | None = None,
+    timeout: int = 30,
+    failure_message: str | None = None,
+    failure_voice: str | None = None,
+) -> dict[str, Any]:
+    """``call.transfer`` 요청 본문을 만든다. ``CallSession.transfer`` 와 ``IncomingCall.transfer`` 가 함께 쓴다."""
+    # 서버는 'original' 만 특별 취급하고 나머지 값은 조용히 무시한다. 오타를 그대로
+    # 흘려보내면 아무 에러 없이 계정 번호가 나가고, 개발자는 켰다고 믿는다 — 여기서 막는다.
+    if caller_id_mode is not None and caller_id_mode not in ("account", "original"):
+        raise ValueError(f"caller_id_mode must be 'account' or 'original', got {caller_id_mode!r}")
+    payload: dict[str, Any] = {
+        "to": to,
+        "destinationType": destination_type,
+        "mode": mode,
+        "afterTransfer": after_transfer,
+        "holdMedia": hold_media,
+        "whisper": whisper,
+        "context": context,
+        "callerId": caller_id,
+        "timeout": timeout,
+    }
+    # 안 주면 키를 붙이지 않는다 — 구 서버와 기존 동작을 그대로 둔다(additive).
+    if caller_id_mode is not None:
+        payload["callerIdMode"] = caller_id_mode
+    # 같은 이유로 안 주면 키 자체를 안 붙인다. 빈 문자열도 보내지 않는다 — 서버도 막지만
+    # 빈 문장을 합성하러 왕복시킬 이유가 없다.
+    if failure_message:
+        payload["failureMessage"] = failure_message
+    if failure_voice:
+        payload["failureVoice"] = failure_voice
+    return payload
+
+
 class CallSession:
     def __init__(
         self,
@@ -343,32 +386,20 @@ class CallSession:
         """
         if not self._transfer_fn:
             raise RuntimeError("transfer not available")
-        # 서버는 'original' 만 특별 취급하고 나머지 값은 조용히 무시한다. 오타를 그대로
-        # 흘려보내면 아무 에러 없이 계정 번호가 나가고, 개발자는 켰다고 믿는다 — 여기서 막는다.
-        if caller_id_mode is not None and caller_id_mode not in ("account", "original"):
-            raise ValueError(
-                f"caller_id_mode must be 'account' or 'original', got {caller_id_mode!r}"
-            )
-        payload: dict[str, Any] = {
-            "to": to,
-            "destinationType": destination_type,
-            "mode": mode,
-            "afterTransfer": after_transfer,
-            "holdMedia": hold_media,
-            "whisper": whisper,
-            "context": context,
-            "callerId": caller_id,
-            "timeout": timeout,
-        }
-        # 안 주면 키를 붙이지 않는다 — 구 서버와 기존 동작을 그대로 둔다(additive).
-        if caller_id_mode is not None:
-            payload["callerIdMode"] = caller_id_mode
-        # 같은 이유로 안 주면 키 자체를 안 붙인다. 빈 문자열도 보내지 않는다 — 서버도 막지만
-        # 빈 문장을 합성하러 왕복시킬 이유가 없다.
-        if failure_message:
-            payload["failureMessage"] = failure_message
-        if failure_voice:
-            payload["failureVoice"] = failure_voice
+        payload = build_transfer_payload(
+            to,
+            destination_type=destination_type,
+            mode=mode,
+            after_transfer=after_transfer,
+            hold_media=hold_media,
+            whisper=whisper,
+            context=context,
+            caller_id=caller_id,
+            caller_id_mode=caller_id_mode,
+            timeout=timeout,
+            failure_message=failure_message,
+            failure_voice=failure_voice,
+        )
         return await self._transfer_fn(payload)
 
     async def send_dtmf_sequence(self, digits: str) -> None:
