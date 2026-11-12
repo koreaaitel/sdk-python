@@ -246,3 +246,176 @@ async def test_transfer_return_connection_loss_restores_interruptions() -> None:
     assert json.loads(await task)["status"] == "unknown"
     assert ctx.speech_handle.allow_interruptions is True
     never.cancel()
+
+
+# ── hang_up 은 작별 인사 재생을 마친 뒤 끊는다 ─────────────────
+
+
+class _PlayoutCtx:
+    """RunContext 중 hang_up 이 쓰는 두 가지만."""
+
+    def __init__(self, *, interrupted: bool = False) -> None:
+        self.played = asyncio.Event()
+        self.interrupted = interrupted
+        self.allow_interruptions = True
+
+    def disallow_interruptions(self) -> None:
+        if self.interrupted:
+            raise RuntimeError("already interrupted")
+        self.allow_interruptions = False
+
+    async def wait_for_playout(self) -> None:
+        await self.played.wait()
+
+
+async def test_hang_up_waits_for_farewell_playout() -> None:
+    from livekit.agents.llm import StopResponse
+
+    tools = ClawOpsPhoneTools()
+    call = _make_call()
+    tools.set_call(call)
+    ctx = _PlayoutCtx()
+
+    async def finish_playout() -> None:
+        await asyncio.sleep(0.1)
+        call._hangup_fn.assert_not_awaited()  # 인사가 재생되는 동안엔 끊지 않는다
+        assert ctx.allow_interruptions is False  # 맞장구가 인사를 끊어 도구가 취소되지 않게
+        ctx.played.set()
+
+    results = await asyncio.gather(tools._hang_up(ctx), finish_playout(), return_exceptions=True)
+    assert isinstance(results[0], StopResponse)  # 끊은 뒤 응답을 만들지 않는다
+    call._hangup_fn.assert_awaited_once()
+
+
+async def test_hang_up_playout_wait_has_a_cap(monkeypatch: pytest.MonkeyPatch) -> None:
+    from livekit.agents.llm import StopResponse
+
+    from clawops.agent.livekit import _toolset
+
+    monkeypatch.setattr(_toolset, "HANG_UP_PLAYOUT_CAP_S", 0.05)
+    tools = ClawOpsPhoneTools()
+    call = _make_call()
+    tools.set_call(call)
+
+    with pytest.raises(StopResponse):
+        await asyncio.wait_for(tools._hang_up(_PlayoutCtx()), 2.0)  # 재생 완료 신호가 끝내 안 와도
+    call._hangup_fn.assert_awaited_once()
+
+
+async def test_hang_up_skipped_when_caller_already_interrupted() -> None:
+    tools = ClawOpsPhoneTools()
+    call = _make_call()
+    tools.set_call(call)
+
+    out = await tools._hang_up(_PlayoutCtx(interrupted=True))
+    assert "끊지 않았습니다" in out
+    call._hangup_fn.assert_not_awaited()
+
+
+class _TurnSpeech:
+    def __init__(self) -> None:
+        self.chat_items: list = []
+        self.turn_done = asyncio.Event()
+
+    async def wait_for_playout(self) -> None:
+        await self.turn_done.wait()
+
+
+class _TurnCtx(_PlayoutCtx):
+    """말 없이 hang_up 경로까지 보는 ctx."""
+
+    def __init__(self, *, realtime: bool = False) -> None:
+        super().__init__()
+        self.speech_handle = _TurnSpeech()
+        self.realtime = realtime
+
+
+@pytest.fixture
+def fake_realtime_check(monkeypatch: pytest.MonkeyPatch) -> None:
+    from clawops.agent.livekit import _toolset
+
+    monkeypatch.setattr(_toolset, "_is_realtime_session", lambda ctx: getattr(ctx, "realtime", False))
+
+
+async def test_tool_only_hang_up_survives_closed_call(fake_realtime_check) -> None:
+    """인사 도중 상대가 먼저 끊어 닫힌 회선이어도 뒤에서 끊는 태스크가 예외를 흘리지 않는다."""
+    from clawops.agent.livekit._toolset import HANG_UP_FAREWELL_PROMPT
+
+    tools = ClawOpsPhoneTools()
+    call = _make_call()
+    call._hangup_fn = AsyncMock(side_effect=ConnectionError("media ws closed"))
+    tools.set_call(call)
+    ctx = _TurnCtx()
+    ctx.played.set()
+    assert await tools._hang_up(ctx) == HANG_UP_FAREWELL_PROMPT
+    ctx.speech_handle.turn_done.set()
+    await asyncio.sleep(0.05)
+    task = tools._hangup_after_turn
+    assert task is not None and task.done() and task.exception() is None
+
+
+async def test_realtime_tool_only_hang_up_does_not_ask_for_farewell(fake_realtime_check) -> None:
+    from livekit.agents.llm import StopResponse
+
+    tools = ClawOpsPhoneTools()
+    call = _make_call()
+    tools.set_call(call)
+    ctx = _TurnCtx(realtime=True)
+    ctx.played.set()
+    with pytest.raises(StopResponse):
+        await tools._hang_up(ctx)
+    call._hangup_fn.assert_awaited_once()
+
+
+async def test_hang_up_waits_share_one_cap(monkeypatch: pytest.MonkeyPatch, fake_realtime_check) -> None:
+    """단계 재생 대기가 상한을 다 쓰면 인사를 시키지 않고 끊는다 — 합계가 상한을 넘지 않는다."""
+    from livekit.agents.llm import StopResponse
+
+    from clawops.agent.livekit import _toolset
+
+    monkeypatch.setattr(_toolset, "HANG_UP_PLAYOUT_CAP_S", 0.05)
+    tools = ClawOpsPhoneTools()
+    call = _make_call()
+    tools.set_call(call)
+    with pytest.raises(StopResponse):
+        await asyncio.wait_for(tools._hang_up(_TurnCtx()), 2.0)
+    call._hangup_fn.assert_awaited_once()
+
+
+def test_farewell_prompt_is_language_neutral() -> None:
+    from clawops.agent.livekit._toolset import HANG_UP_FAREWELL_PROMPT
+
+    assert "same language as this conversation" in HANG_UP_FAREWELL_PROMPT
+
+
+def test_is_realtime_session_tells_realtime_from_pipeline() -> None:
+    from types import SimpleNamespace
+
+    from livekit.agents import llm
+
+    from clawops.agent.livekit._toolset import _is_realtime_session
+
+    class _RT(llm.RealtimeModel):
+        def __init__(self) -> None:
+            super().__init__(
+                capabilities=llm.RealtimeCapabilities(
+                    message_truncation=False,
+                    turn_detection=False,
+                    user_transcription=False,
+                    auto_tool_reply_generation=False,
+                    audio_output=True,
+                    manual_function_calls=True,
+                )
+            )
+
+        def session(self):
+            raise NotImplementedError
+
+        async def aclose(self) -> None:
+            pass
+
+    def ctx(model: object) -> SimpleNamespace:
+        return SimpleNamespace(session=SimpleNamespace(llm=model))
+
+    assert _is_realtime_session(ctx(_RT())) is True
+    assert _is_realtime_session(ctx(object())) is False
