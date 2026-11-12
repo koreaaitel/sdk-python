@@ -14,13 +14,13 @@ import pytest
 
 pytest.importorskip("livekit.agents", reason="clawops[livekit] 미설치")
 
-from livekit import rtc  # noqa: E402
-from livekit.agents import Agent, AgentSession, llm, tts  # noqa: E402
-from livekit.agents.llm import ChatChunk, ChoiceDelta, FunctionToolCall  # noqa: E402
-from livekit.agents.voice.io import AudioOutput, AudioOutputCapabilities  # noqa: E402
+from livekit import rtc
+from livekit.agents import Agent, AgentSession, llm, tts
+from livekit.agents.llm import ChatChunk, ChoiceDelta, FunctionToolCall
+from livekit.agents.voice.io import AudioOutput, AudioOutputCapabilities
 
-from clawops.agent._session import CallSession  # noqa: E402
-from clawops.agent.livekit._toolset import ClawOpsPhoneTools  # noqa: E402
+from clawops.agent._session import CallSession
+from clawops.agent.livekit._toolset import ClawOpsPhoneTools
 
 SR = 16000
 FAREWELL_S = 0.8
@@ -29,7 +29,7 @@ FAREWELL_S = 0.8
 class _UnusedLLM(llm.LLM):
     """파이프라인 경로를 켜는 표지 — 노드를 덮어써 호출되지 않는다."""
 
-    def chat(self, **kwargs):  # noqa: ANN003, ANN201
+    def chat(self, **kwargs):
         raise AssertionError("llm_node 를 덮어썼으니 불리지 않는다")
 
 
@@ -37,7 +37,7 @@ class _UnusedTTS(tts.TTS):
     def __init__(self) -> None:
         super().__init__(capabilities=tts.TTSCapabilities(streaming=False), sample_rate=SR, num_channels=1)
 
-    def synthesize(self, text, **kwargs):  # noqa: ANN001, ANN003, ANN201
+    def synthesize(self, text, **kwargs):
         raise AssertionError("tts_node 를 덮어썼으니 불리지 않는다")
 
 
@@ -74,13 +74,13 @@ class _PlayingOutput(AudioOutput):
 class _FarewellAgent(Agent):
     """``script`` 의 한 줄 = LLM 응답 하나: (말할 문장 또는 None, hang_up 을 부르나)."""
 
-    def __init__(self, tools: list, script: "list[tuple[str | None, bool]] | None" = None) -> None:
+    def __init__(self, tools: list, script: list[tuple[str | None, bool]] | None = None) -> None:
         super().__init__(instructions="test", tools=tools)
         self.turns = 0
         self.script = script or [("감사합니다. 좋은 하루 보내세요.", True)]
         self.tool_outputs: list[str] = []
 
-    async def llm_node(self, chat_ctx, tools, model_settings):  # noqa: ANN001, ANN201
+    async def llm_node(self, chat_ctx, tools, model_settings):
         for item in chat_ctx.items:
             if item.type == "function_call_output" and item.output not in self.tool_outputs:
                 self.tool_outputs.append(item.output)
@@ -100,7 +100,7 @@ class _FarewellAgent(Agent):
                 ),
             )
 
-    async def tts_node(self, text, model_settings):  # noqa: ANN001, ANN201
+    async def tts_node(self, text, model_settings):
         async for _ in text:
             pass
         await asyncio.sleep(0.3)  # 합성 지연 — 도구는 이 사이에 이미 돈다
@@ -108,7 +108,7 @@ class _FarewellAgent(Agent):
         yield rtc.AudioFrame(b"\x00\x00" * n, SR, 1, n)
 
 
-async def _run(script=None):  # noqa: ANN001, ANN202
+async def _run(script=None):
     timeline: list[str] = []
     call = CallSession(call_id="c", from_number="010", to_number="070", account_id="AC")
     call._hangup_fn = AsyncMock(side_effect=lambda: timeline.append("hangup"))

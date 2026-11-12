@@ -331,9 +331,12 @@ def _spoke_since(speech: Any, start: int) -> bool:
     「확인해 볼게요」 같은 말을 작별 인사로 치지 않는다.
     """
     for item in (getattr(speech, "chat_items", None) or [])[start:]:
-        if getattr(item, "type", None) == "message" and getattr(item, "role", None) == "assistant":
-            if (getattr(item, "text_content", None) or "").strip():
-                return True
+        if (
+            getattr(item, "type", None) == "message"
+            and getattr(item, "role", None) == "assistant"
+            and (getattr(item, "text_content", None) or "").strip()
+        ):
+            return True
     return False
 
 

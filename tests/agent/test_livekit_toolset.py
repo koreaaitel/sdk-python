@@ -408,7 +408,7 @@ def test_is_realtime_session_tells_realtime_from_pipeline() -> None:
                 )
             )
 
-        def session(self):  # noqa: ANN201
+        def session(self):
             raise NotImplementedError
 
         async def aclose(self) -> None:
