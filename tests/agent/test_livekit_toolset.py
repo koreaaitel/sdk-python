@@ -321,23 +321,40 @@ class _TurnSpeech:
         await self.turn_done.wait()
 
 
+class _EventSession:
+    """speech_created 구독만 흉내 낸다."""
+
+    def __init__(self) -> None:
+        self.handlers: dict[str, list] = {}
+
+    def on(self, event: str, fn) -> None:
+        self.handlers.setdefault(event, []).append(fn)
+
+    def off(self, event: str, fn) -> None:
+        self.handlers.get(event, []).remove(fn)
+
+    def emit(self, event: str, ev) -> None:
+        for fn in list(self.handlers.get(event, [])):
+            fn(ev)
+
+
 class _TurnCtx(_PlayoutCtx):
-    """말 없이 hang_up 경로까지 보는 ctx."""
+    """말 없이 hang_up 경로까지 보는 ctx. ``auto_reply`` 면 도구 결과에 대한 응답이 새 발화로 오는 realtime."""
 
-    def __init__(self, *, realtime: bool = False) -> None:
+    def __init__(self, *, auto_reply: bool = False) -> None:
         super().__init__()
+        from types import SimpleNamespace
+
         self.speech_handle = _TurnSpeech()
-        self.realtime = realtime
+        self.session = _EventSession()
+        self._activity = SimpleNamespace(
+            realtime_llm_session=SimpleNamespace(
+                capabilities=SimpleNamespace(auto_tool_reply_generation=auto_reply)
+            )
+        )
 
 
-@pytest.fixture
-def fake_realtime_check(monkeypatch: pytest.MonkeyPatch) -> None:
-    from clawops.agent.livekit import _toolset
-
-    monkeypatch.setattr(_toolset, "_is_realtime_session", lambda ctx: getattr(ctx, "realtime", False))
-
-
-async def test_tool_only_hang_up_survives_closed_call(fake_realtime_check) -> None:
+async def test_tool_only_hang_up_survives_closed_call() -> None:
     """인사 도중 상대가 먼저 끊어 닫힌 회선이어도 뒤에서 끊는 태스크가 예외를 흘리지 않는다."""
     from clawops.agent.livekit._toolset import HANG_UP_FAREWELL_PROMPT
 
@@ -354,20 +371,86 @@ async def test_tool_only_hang_up_survives_closed_call(fake_realtime_check) -> No
     assert task is not None and task.done() and task.exception() is None
 
 
-async def test_realtime_tool_only_hang_up_does_not_ask_for_farewell(fake_realtime_check) -> None:
+async def test_tool_only_hang_up_asks_for_farewell_and_hangs_up_after_the_turn() -> None:
+    """파이프라인·OpenAI realtime: 인사를 시키고, 같은 발화(턴)가 다 재생된 뒤 끊는다."""
+    from clawops.agent.livekit._toolset import HANG_UP_FAREWELL_PROMPT
+
+    tools = ClawOpsPhoneTools()
+    call = _make_call()
+    tools.set_call(call)
+    ctx = _TurnCtx()
+    ctx.played.set()
+    assert await tools._hang_up(ctx) == HANG_UP_FAREWELL_PROMPT
+    await asyncio.sleep(0.05)
+    call._hangup_fn.assert_not_awaited()  # 인사 턴이 재생되는 동안엔 끊지 않는다
+    ctx.speech_handle.turn_done.set()
+    await asyncio.sleep(0.05)
+    call._hangup_fn.assert_awaited_once()
+
+
+async def test_auto_reply_realtime_waits_for_the_next_speech_then_hangs_up() -> None:
+    """도구 응답이 새 발화로 오는 realtime: 그 발화가 생기고 다 재생된 뒤 끊는다(LiveKit EndCallTool 과 같다)."""
+    from types import SimpleNamespace
+
+    from clawops.agent.livekit._toolset import HANG_UP_FAREWELL_PROMPT
+
+    tools = ClawOpsPhoneTools()
+    call = _make_call()
+    tools.set_call(call)
+    ctx = _TurnCtx(auto_reply=True)
+    ctx.played.set()
+    assert await tools._hang_up(ctx) == HANG_UP_FAREWELL_PROMPT
+    ctx.speech_handle.turn_done.set()  # 도구를 부른 발화가 끝나도
+    await asyncio.sleep(0.05)
+    call._hangup_fn.assert_not_awaited()  # 인사 발화가 아직이면 끊지 않는다
+    reply = _TurnSpeech()
+    ctx.session.emit("speech_created", SimpleNamespace(speech_handle=reply))
+    await asyncio.sleep(0.05)
+    call._hangup_fn.assert_not_awaited()
+    reply.turn_done.set()
+    await asyncio.sleep(0.05)
+    call._hangup_fn.assert_awaited_once()
+    assert ctx.session.handlers["speech_created"] == []  # 구독을 남기지 않는다
+
+
+async def test_auto_reply_realtime_hangs_up_when_no_reply_comes(monkeypatch: pytest.MonkeyPatch) -> None:
+    from clawops.agent.livekit import _toolset
+
+    monkeypatch.setattr(_toolset, "HANG_UP_REPLY_CREATED_TIMEOUT_S", 0.05)
+    tools = ClawOpsPhoneTools()
+    call = _make_call()
+    tools.set_call(call)
+    ctx = _TurnCtx(auto_reply=True)
+    ctx.played.set()
+    await tools._hang_up(ctx)
+    await asyncio.sleep(0.2)
+    call._hangup_fn.assert_awaited_once()
+    assert ctx.session.handlers["speech_created"] == []
+
+
+async def test_hang_up_after_speaking_in_the_same_step_does_not_ask_again() -> None:
+    from types import SimpleNamespace
+
     from livekit.agents.llm import StopResponse
 
     tools = ClawOpsPhoneTools()
     call = _make_call()
     tools.set_call(call)
-    ctx = _TurnCtx(realtime=True)
-    ctx.played.set()
-    with pytest.raises(StopResponse):
-        await tools._hang_up(ctx)
+    ctx = _TurnCtx()
+
+    async def speak_then_finish() -> None:
+        await asyncio.sleep(0.02)
+        ctx.speech_handle.chat_items.append(
+            SimpleNamespace(type="message", role="assistant", text_content="안녕히 계세요.")
+        )
+        ctx.played.set()
+
+    results = await asyncio.gather(tools._hang_up(ctx), speak_then_finish(), return_exceptions=True)
+    assert isinstance(results[0], StopResponse)
     call._hangup_fn.assert_awaited_once()
 
 
-async def test_hang_up_waits_share_one_cap(monkeypatch: pytest.MonkeyPatch, fake_realtime_check) -> None:
+async def test_hang_up_waits_share_one_cap(monkeypatch: pytest.MonkeyPatch) -> None:
     """단계 재생 대기가 상한을 다 쓰면 인사를 시키지 않고 끊는다 — 합계가 상한을 넘지 않는다."""
     from livekit.agents.llm import StopResponse
 
@@ -382,40 +465,25 @@ async def test_hang_up_waits_share_one_cap(monkeypatch: pytest.MonkeyPatch, fake
     call._hangup_fn.assert_awaited_once()
 
 
-def test_farewell_prompt_is_language_neutral() -> None:
+def test_farewell_prompt_is_language_neutral_and_skips_a_repeated_goodbye() -> None:
     from clawops.agent.livekit._toolset import HANG_UP_FAREWELL_PROMPT
 
     assert "same language as this conversation" in HANG_UP_FAREWELL_PROMPT
+    assert "already said goodbye" in HANG_UP_FAREWELL_PROMPT
 
 
-def test_is_realtime_session_tells_realtime_from_pipeline() -> None:
+def test_replies_in_new_speech_reads_the_realtime_capability() -> None:
     from types import SimpleNamespace
 
-    from livekit.agents import llm
+    from clawops.agent.livekit._toolset import _replies_in_new_speech
 
-    from clawops.agent.livekit._toolset import _is_realtime_session
+    def ctx(auto: bool | None) -> SimpleNamespace:
+        if auto is None:  # 파이프라인: realtime 세션이 없다
+            return SimpleNamespace(_activity=SimpleNamespace(realtime_llm_session=None))
+        caps = SimpleNamespace(auto_tool_reply_generation=auto)
+        return SimpleNamespace(_activity=SimpleNamespace(realtime_llm_session=SimpleNamespace(capabilities=caps)))
 
-    class _RT(llm.RealtimeModel):
-        def __init__(self) -> None:
-            super().__init__(
-                capabilities=llm.RealtimeCapabilities(
-                    message_truncation=False,
-                    turn_detection=False,
-                    user_transcription=False,
-                    auto_tool_reply_generation=False,
-                    audio_output=True,
-                    manual_function_calls=True,
-                )
-            )
-
-        def session(self):
-            raise NotImplementedError
-
-        async def aclose(self) -> None:
-            pass
-
-    def ctx(model: object) -> SimpleNamespace:
-        return SimpleNamespace(session=SimpleNamespace(llm=model))
-
-    assert _is_realtime_session(ctx(_RT())) is True
-    assert _is_realtime_session(ctx(object())) is False
+    assert _replies_in_new_speech(ctx(True)) is True
+    assert _replies_in_new_speech(ctx(False)) is False
+    assert _replies_in_new_speech(ctx(None)) is False
+    assert _replies_in_new_speech(SimpleNamespace()) is False
