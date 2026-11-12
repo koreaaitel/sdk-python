@@ -35,10 +35,15 @@ HANG_UP_PLAYOUT_CAP_S = 15.0
 # 말 없이 hang_up 만 부른 응답에 돌려주는 도구 결과. LiveKit 은 이걸 받고 같은 턴에서 한 번 더 응답한다.
 # 에이전트 언어가 제각각이라 지시는 언어 중립으로 두고 「대화 언어로」 말하게 한다.
 HANG_UP_FAREWELL_PROMPT = (
-    "The call will end now. Say one short goodbye sentence to the caller, in the same language "
-    "as this conversation. Do not ask anything, do not start a new topic, and do not call any "
-    "tools. The call hangs up as soon as you finish speaking."
+    "The call will end now. If your last message to the caller was already a goodbye, say nothing "
+    "more and output no text. Otherwise say one short goodbye sentence to the caller, in the same "
+    "language as this conversation. Do not ask anything, do not start a new topic, and do not call "
+    "any tools. The call hangs up as soon as you finish speaking."
 )
+
+# 응답을 스스로 새로 만드는 realtime 모델(도구 결과 뒤 응답이 새 발화로 온다)에서 그 발화가 생기길 기다리는 상한.
+# LiveKit EndCallTool 과 같은 값.
+HANG_UP_REPLY_CREATED_TIMEOUT_S = 5.0
 
 _HANG_UP_DESCRIPTION = (
     "End the phone call. Use when the conversation is finished or the caller says goodbye."
@@ -128,10 +133,12 @@ class ClawOpsPhoneTools(Toolset):
         2. ``ctx.wait_for_playout()`` 을 기다린다 — 같은 응답에서 먼저 말한 인사.
         3. 이 단계에서 말한 것이 있으면 끊고 ``StopResponse`` — 결과를 돌려주면 LiveKit 이 닫히는 회선에
            대고 응답을 또 만든다.
-        4. 파이프라인(STT·LLM·TTS)에서 말 없이 ``hang_up`` 만 부른 응답이면 끊지 않고
-           :data:`HANG_UP_FAREWELL_PROMPT` 를 돌려준다. LiveKit 은 같은 턴에서 한 번 더 응답하고, 그 턴
-           전체의 재생이 끝나면 뒤에서 끊는다. realtime 모델은 말한 내용이 음성 전사에서 와 판정이
-           틀릴 수 있어(인사를 두 번 시킨다) 이 단계를 건너뛴다.
+        4. 말 없이 ``hang_up`` 만 부른 응답이면 끊지 않고 :data:`HANG_UP_FAREWELL_PROMPT` 를 돌려준다.
+           파이프라인과 OpenAI realtime 은 같은 발화(턴)에서 한 번 더 응답하므로 그 턴 전체의 재생이
+           끝나면 뒤에서 끊는다. 도구 결과에 대한 응답을 **새 발화**로 만드는 realtime 모델
+           (``auto_tool_reply_generation``)은 LiveKit ``EndCallTool`` 처럼 다음 발화가 생기길 기다렸다가
+           그 발화가 끝나면 끊는다. 앞 응답에서 이미 인사를 했을 수 있어(모델이 인사와 hang_up 을 다른
+           응답으로 나누는 경우) 인사 요청은 「이미 했으면 말하지 말라」고 모델에게 맡긴다.
 
         모든 대기는 호출 시점부터 **합쳐서** :data:`HANG_UP_PLAYOUT_CAP_S` 안이다.
         """
@@ -151,21 +158,47 @@ class ClawOpsPhoneTools(Toolset):
                 self._hangup_after_turn is None
                 and speech is not None
                 and loop.time() < deadline
-                and not _is_realtime_session(ctx)
                 and not _spoke_since(speech, items_before)
             ):
-                # ⚠️ 이 도구의 태스크 안에서 speech.wait_for_playout() 을 부르면 LiveKit 이 순환 대기로
-                #    막는다. 새로 띄운 태스크는 도구 태스크 표식을 물려받지 않는다. 세션이 닫히면 speech 도
-                #    끝나 이 태스크는 곧바로 끝난다.
-                self._hangup_after_turn = asyncio.ensure_future(
-                    self._hang_up_after(speech, call, deadline)
-                )
+                log.info("hang_up: 말 없이 호출 — 작별 인사를 요청하고 그 발화 뒤에 끊는다")
+                if _replies_in_new_speech(ctx):
+                    # 인사는 새 발화로 온다 — 결과를 돌려주기 **전에** 구독해야 그 발화를 놓치지 않는다.
+                    self._hangup_after_turn = asyncio.ensure_future(
+                        self._hang_up_after_reply(_next_speech(ctx.session), call, deadline)
+                    )
+                else:
+                    # ⚠️ 이 도구의 태스크 안에서 speech.wait_for_playout() 을 부르면 LiveKit 이 순환 대기로
+                    #    막는다. 새로 띄운 태스크는 도구 태스크 표식을 물려받지 않는다. 세션이 닫히면 speech 도
+                    #    끝나 이 태스크는 곧바로 끝난다.
+                    self._hangup_after_turn = asyncio.ensure_future(
+                        self._hang_up_after(speech, call, deadline)
+                    )
                 return HANG_UP_FAREWELL_PROMPT
         await self._hang_up_once(call)
         raise StopResponse()
 
     async def _hang_up_after(self, speech: Any, call: CallSession, deadline: float) -> None:
         await _wait_until(speech.wait_for_playout(), deadline, "작별 인사 턴")
+        try:
+            await self._hang_up_once(call)
+        except Exception as e:  # noqa: BLE001 — 인사 도중 상대가 먼저 끊었으면 닫힌 회선이다
+            log.info(f"hang_up: 이미 끝난 통화라 끊기 생략: {e}")
+
+    async def _hang_up_after_reply(
+        self, next_speech: tuple[asyncio.Future[Any], Callable[[], None]], call: CallSession, deadline: float
+    ) -> None:
+        created, unsubscribe = next_speech
+        try:
+            loop = asyncio.get_running_loop()
+            limit = min(deadline, loop.time() + HANG_UP_REPLY_CREATED_TIMEOUT_S)
+            handle = await asyncio.wait_for(asyncio.shield(created), max(0.0, limit - loop.time()))
+        except asyncio.TimeoutError:
+            log.warning("hang_up: 작별 인사 발화가 생기지 않아 그대로 끊는다")
+            handle = None
+        finally:
+            unsubscribe()
+        if handle is not None:
+            await _wait_until(handle.wait_for_playout(), deadline, "작별 인사 발화")
         try:
             await self._hang_up_once(call)
         except Exception as e:  # noqa: BLE001 — 인사 도중 상대가 먼저 끊었으면 닫힌 회선이다
@@ -340,11 +373,33 @@ def _spoke_since(speech: Any, start: int) -> bool:
     return False
 
 
-def _is_realtime_session(ctx: Any) -> bool:
-    """realtime 모델(음성을 모델이 직접 낸다) 세션인가."""
-    from livekit.agents.llm import RealtimeModel
+def _replies_in_new_speech(ctx: Any) -> bool:
+    """도구 결과에 대한 응답을 모델이 스스로 **새 발화**로 만드는 realtime 세션인가(``auto_tool_reply_generation``).
 
-    return isinstance(getattr(getattr(ctx, "session", None), "llm", None), RealtimeModel)
+    OpenAI realtime 은 아니다(LiveKit 이 같은 발화로 응답을 만든다). LiveKit ``EndCallTool`` 과 같은 판정.
+    """
+    activity = getattr(ctx, "_activity", None)
+    rt = getattr(activity, "realtime_llm_session", None)
+    return bool(getattr(getattr(rt, "capabilities", None), "auto_tool_reply_generation", False))
+
+
+def _next_speech(session: Any) -> tuple[asyncio.Future[Any], Callable[[], None]]:
+    """세션의 다음 ``speech_created`` 발화를 받는 future 와 구독 해제 함수."""
+    fut: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
+
+    def _on_created(ev: Any) -> None:
+        if not fut.done():
+            fut.set_result(ev.speech_handle)
+
+    session.on("speech_created", _on_created)
+
+    def _unsubscribe() -> None:
+        try:
+            session.off("speech_created", _on_created)
+        except Exception:  # noqa: BLE001 — 이미 닫힌 세션
+            log.debug("hang_up: speech_created 구독 해제 실패", exc_info=True)
+
+    return fut, _unsubscribe
 
 
 def _log_transfer_result(task: Any) -> None:
