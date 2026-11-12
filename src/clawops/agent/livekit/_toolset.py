@@ -29,6 +29,9 @@ from .._transfer_tool import TRANSFER_INITIATED, is_call_over, wait_for_transfer
 
 log = logging.getLogger("clawops.agent.livekit")
 
+# hang_up 이 작별 인사 재생을 기다리는 상한. TTS 가 멈추거나 재생 완료 신호가 안 와도 통화는 끊는다.
+HANG_UP_PLAYOUT_CAP_S = 15.0
+
 _HANG_UP_DESCRIPTION = (
     "End the phone call. Use when the conversation is finished or the caller says goodbye."
 )
@@ -105,9 +108,32 @@ class ClawOpsPhoneTools(Toolset):
     # ── 도구 구현 ───────────────────────────────────────────────
 
     async def _hang_up(self, ctx: RunContext[None]) -> str:
-        """End the phone call."""
-        await self._require_call().hangup()
-        return ""
+        """End the phone call.
+
+        같은 응답에서 먼저 말한 작별 인사가 **다 재생된 뒤에** 끊는다. LiveKit 은 도구를 문장 음성
+        합성·재생과 동시에 돌리므로, 바로 끊으면 인사가 합성 도중 잘린다. 순서:
+
+        1. 끼어들기를 막는다 — 끊기로 정한 뒤 「네」 같은 맞장구가 인사를 끊으면 LiveKit 이 이 도구를
+           취소해 통화가 안 끝난다. 이미 끼어들기가 일어났으면 끊지 않는다(발신자가 말을 이었다).
+        2. ``ctx.wait_for_playout()`` 을 :data:`HANG_UP_PLAYOUT_CAP_S` 상한으로 기다린다.
+        3. 끊고 ``StopResponse`` — 결과를 돌려주면 LiveKit 이 닫히는 회선에 대고 응답을 또 만든다.
+        """
+        call = self._require_call()
+        if ctx is not None:
+            try:
+                ctx.disallow_interruptions()
+            except RuntimeError:
+                return "통화를 끊지 않았습니다. 발신자가 말을 이었습니다."
+            try:
+                await asyncio.wait_for(ctx.wait_for_playout(), HANG_UP_PLAYOUT_CAP_S)
+            except asyncio.TimeoutError:
+                log.warning(
+                    f"hang_up: 작별 인사 재생이 {HANG_UP_PLAYOUT_CAP_S:.0f}초 안에 끝나지 않아 그대로 끊는다"
+                )
+            except Exception as e:  # noqa: BLE001 — 대기가 실패해도 끊기는 해야 한다
+                log.warning(f"hang_up: 재생 대기 실패, 그대로 끊는다: {e}")
+        await call.hangup()
+        raise StopResponse()
 
     async def _collect_dtmf(
         self,

@@ -246,3 +246,67 @@ async def test_transfer_return_connection_loss_restores_interruptions() -> None:
     assert json.loads(await task)["status"] == "unknown"
     assert ctx.speech_handle.allow_interruptions is True
     never.cancel()
+
+
+# ── hang_up 은 작별 인사 재생을 마친 뒤 끊는다 ─────────────────
+
+
+class _PlayoutCtx:
+    """RunContext 중 hang_up 이 쓰는 두 가지만."""
+
+    def __init__(self, *, interrupted: bool = False) -> None:
+        self.played = asyncio.Event()
+        self.interrupted = interrupted
+        self.allow_interruptions = True
+
+    def disallow_interruptions(self) -> None:
+        if self.interrupted:
+            raise RuntimeError("already interrupted")
+        self.allow_interruptions = False
+
+    async def wait_for_playout(self) -> None:
+        await self.played.wait()
+
+
+async def test_hang_up_waits_for_farewell_playout() -> None:
+    from livekit.agents.llm import StopResponse
+
+    tools = ClawOpsPhoneTools()
+    call = _make_call()
+    tools.set_call(call)
+    ctx = _PlayoutCtx()
+
+    async def finish_playout() -> None:
+        await asyncio.sleep(0.1)
+        call._hangup_fn.assert_not_awaited()  # 인사가 재생되는 동안엔 끊지 않는다
+        assert ctx.allow_interruptions is False  # 맞장구가 인사를 끊어 도구가 취소되지 않게
+        ctx.played.set()
+
+    results = await asyncio.gather(tools._hang_up(ctx), finish_playout(), return_exceptions=True)
+    assert isinstance(results[0], StopResponse)  # 끊은 뒤 응답을 만들지 않는다
+    call._hangup_fn.assert_awaited_once()
+
+
+async def test_hang_up_playout_wait_has_a_cap(monkeypatch: pytest.MonkeyPatch) -> None:
+    from livekit.agents.llm import StopResponse
+
+    from clawops.agent.livekit import _toolset
+
+    monkeypatch.setattr(_toolset, "HANG_UP_PLAYOUT_CAP_S", 0.05)
+    tools = ClawOpsPhoneTools()
+    call = _make_call()
+    tools.set_call(call)
+
+    with pytest.raises(StopResponse):
+        await asyncio.wait_for(tools._hang_up(_PlayoutCtx()), 2.0)  # 재생 완료 신호가 끝내 안 와도
+    call._hangup_fn.assert_awaited_once()
+
+
+async def test_hang_up_skipped_when_caller_already_interrupted() -> None:
+    tools = ClawOpsPhoneTools()
+    call = _make_call()
+    tools.set_call(call)
+
+    out = await tools._hang_up(_PlayoutCtx(interrupted=True))
+    assert "끊지 않았습니다" in out
+    call._hangup_fn.assert_not_awaited()
