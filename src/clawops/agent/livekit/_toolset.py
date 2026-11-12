@@ -29,13 +29,15 @@ from .._transfer_tool import TRANSFER_INITIATED, is_call_over, wait_for_transfer
 
 log = logging.getLogger("clawops.agent.livekit")
 
-# hang_up 이 작별 인사 재생을 기다리는 상한. TTS 가 멈추거나 재생 완료 신호가 안 와도 통화는 끊는다.
+# hang_up 의 대기 상한(호출 시점부터 모든 대기 합계). TTS 가 멈추거나 재생 완료 신호가 안 와도 통화는 끊는다.
 HANG_UP_PLAYOUT_CAP_S = 15.0
 
 # 말 없이 hang_up 만 부른 응답에 돌려주는 도구 결과. LiveKit 은 이걸 받고 같은 턴에서 한 번 더 응답한다.
+# 에이전트 언어가 제각각이라 지시는 언어 중립으로 두고 「대화 언어로」 말하게 한다.
 HANG_UP_FAREWELL_PROMPT = (
-    "통화 종료가 예약되었습니다. 지금 상대에게 짧은 작별 인사 한 문장만 말하세요. "
-    "질문하거나 새 이야기를 꺼내지 말고 도구도 부르지 마세요. 그 말이 끝나면 통화가 끊깁니다."
+    "The call will end now. Say one short goodbye sentence to the caller, in the same language "
+    "as this conversation. Do not ask anything, do not start a new topic, and do not call any "
+    "tools. The call hangs up as soon as you finish speaking."
 )
 
 _HANG_UP_DESCRIPTION = (
@@ -123,46 +125,51 @@ class ClawOpsPhoneTools(Toolset):
 
         1. 끼어들기를 막는다 — 끊기로 정한 뒤 「네」 같은 맞장구가 인사를 끊으면 LiveKit 이 이 도구를
            취소해 통화가 안 끝난다. 이미 끼어들기가 일어났으면 끊지 않는다(발신자가 말을 이었다).
-        2. ``ctx.wait_for_playout()`` 을 :data:`HANG_UP_PLAYOUT_CAP_S` 상한으로 기다린다 — 같은 응답에서
-           먼저 말한 인사.
-        3. 이 턴에 말한 것이 있으면 끊고 ``StopResponse`` — 결과를 돌려주면 LiveKit 이 닫히는 회선에 대고
-           응답을 또 만든다.
-        4. 말 없이 ``hang_up`` 만 부른 응답이면 끊지 않고 :data:`HANG_UP_FAREWELL_PROMPT` 를 돌려준다.
-           LiveKit 은 같은 턴에서 한 번 더 응답하고, 그 턴 전체의 재생이 끝나면 뒤에서 끊는다(상한 같음).
+        2. ``ctx.wait_for_playout()`` 을 기다린다 — 같은 응답에서 먼저 말한 인사.
+        3. 이 단계에서 말한 것이 있으면 끊고 ``StopResponse`` — 결과를 돌려주면 LiveKit 이 닫히는 회선에
+           대고 응답을 또 만든다.
+        4. 파이프라인(STT·LLM·TTS)에서 말 없이 ``hang_up`` 만 부른 응답이면 끊지 않고
+           :data:`HANG_UP_FAREWELL_PROMPT` 를 돌려준다. LiveKit 은 같은 턴에서 한 번 더 응답하고, 그 턴
+           전체의 재생이 끝나면 뒤에서 끊는다. realtime 모델은 말한 내용이 음성 전사에서 와 판정이
+           틀릴 수 있어(인사를 두 번 시킨다) 이 단계를 건너뛴다.
+
+        모든 대기는 호출 시점부터 **합쳐서** :data:`HANG_UP_PLAYOUT_CAP_S` 안이다.
         """
         call = self._require_call()
         if ctx is not None:
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + HANG_UP_PLAYOUT_CAP_S
+            speech = getattr(ctx, "speech_handle", None)
+            # 이 단계의 assistant 메시지는 재생이 끝나야 들어온다 — 지금 개수가 이 단계의 시작점이다.
+            items_before = len(getattr(speech, "chat_items", None) or [])
             try:
                 ctx.disallow_interruptions()
             except RuntimeError:
                 return "통화를 끊지 않았습니다. 발신자가 말을 이었습니다."
-            try:
-                await asyncio.wait_for(ctx.wait_for_playout(), HANG_UP_PLAYOUT_CAP_S)
-            except asyncio.TimeoutError:
-                log.warning(
-                    f"hang_up: 작별 인사 재생이 {HANG_UP_PLAYOUT_CAP_S:.0f}초 안에 끝나지 않아 그대로 끊는다"
-                )
-            except Exception as e:  # noqa: BLE001 — 대기가 실패해도 끊기는 해야 한다
-                log.warning(f"hang_up: 재생 대기 실패, 그대로 끊는다: {e}")
-            speech = getattr(ctx, "speech_handle", None)
-            if self._hangup_after_turn is None and speech is not None and not _spoke_this_turn(speech):
+            await _wait_until(ctx.wait_for_playout(), deadline, "작별 인사 재생")
+            if (
+                self._hangup_after_turn is None
+                and speech is not None
+                and loop.time() < deadline
+                and not _is_realtime_session(ctx)
+                and not _spoke_since(speech, items_before)
+            ):
                 # ⚠️ 이 도구의 태스크 안에서 speech.wait_for_playout() 을 부르면 LiveKit 이 순환 대기로
-                #    막는다. 새로 띄운 태스크는 도구 태스크 표식을 물려받지 않는다.
-                self._hangup_after_turn = asyncio.ensure_future(self._hang_up_after(speech, call))
+                #    막는다. 새로 띄운 태스크는 도구 태스크 표식을 물려받지 않는다. 세션이 닫히면 speech 도
+                #    끝나 이 태스크는 곧바로 끝난다.
+                self._hangup_after_turn = asyncio.ensure_future(
+                    self._hang_up_after(speech, call, deadline)
+                )
                 return HANG_UP_FAREWELL_PROMPT
         await self._hang_up_once(call)
         raise StopResponse()
 
-    async def _hang_up_after(self, speech: Any, call: CallSession) -> None:
+    async def _hang_up_after(self, speech: Any, call: CallSession, deadline: float) -> None:
+        await _wait_until(speech.wait_for_playout(), deadline, "작별 인사 턴")
         try:
-            await asyncio.wait_for(speech.wait_for_playout(), HANG_UP_PLAYOUT_CAP_S)
-        except asyncio.TimeoutError:
-            log.warning(
-                f"hang_up: 작별 인사 턴이 {HANG_UP_PLAYOUT_CAP_S:.0f}초 안에 끝나지 않아 그대로 끊는다"
-            )
-        except Exception as e:  # noqa: BLE001 — 대기가 실패해도 끊기는 해야 한다
-            log.warning(f"hang_up: 작별 인사 턴 대기 실패, 그대로 끊는다: {e}")
-        await self._hang_up_once(call)
+            await self._hang_up_once(call)
+        except Exception as e:  # noqa: BLE001 — 인사 도중 상대가 먼저 끊었으면 닫힌 회선이다
+            log.info(f"hang_up: 이미 끝난 통화라 끊기 생략: {e}")
 
     async def _hang_up_once(self, call: CallSession) -> None:
         if self._hung_up:
@@ -306,13 +313,35 @@ class ClawOpsPhoneTools(Toolset):
         return result
 
 
-def _spoke_this_turn(speech: Any) -> bool:
-    """이 턴(SpeechHandle)에서 에이전트가 실제로 말한 문장이 있었나."""
-    for item in getattr(speech, "chat_items", None) or []:
+async def _wait_until(aw: Awaitable[Any], deadline: float, what: str) -> None:
+    """``deadline``(loop 시각)까지 기다린다. 넘거나 실패해도 던지지 않는다 — 끊기는 해야 한다."""
+    try:
+        await asyncio.wait_for(aw, max(0.0, deadline - asyncio.get_running_loop().time()))
+    except asyncio.TimeoutError:
+        log.warning(f"hang_up: {what}이 {HANG_UP_PLAYOUT_CAP_S:.0f}초 상한 안에 끝나지 않아 그대로 끊는다")
+    except Exception as e:  # noqa: BLE001
+        log.warning(f"hang_up: {what} 대기 실패, 그대로 끊는다: {e}")
+
+
+def _spoke_since(speech: Any, start: int) -> bool:
+    """``speech.chat_items[start:]`` 에 에이전트가 실제로 말한 문장이 있나.
+
+    LiveKit 은 한 단계의 assistant 메시지를 그 단계의 재생이 끝날 때 넣는다(도구는 그보다 먼저 시작된다).
+    도구 진입 시점의 개수부터 보면 **이 도구를 부른 단계**에서 한 말만 센다 — 같은 턴 앞 단계의
+    「확인해 볼게요」 같은 말을 작별 인사로 치지 않는다.
+    """
+    for item in (getattr(speech, "chat_items", None) or [])[start:]:
         if getattr(item, "type", None) == "message" and getattr(item, "role", None) == "assistant":
             if (getattr(item, "text_content", None) or "").strip():
                 return True
     return False
+
+
+def _is_realtime_session(ctx: Any) -> bool:
+    """realtime 모델(음성을 모델이 직접 낸다) 세션인가."""
+    from livekit.agents.llm import RealtimeModel
+
+    return isinstance(getattr(getattr(ctx, "session", None), "llm", None), RealtimeModel)
 
 
 def _log_transfer_result(task: Any) -> None:

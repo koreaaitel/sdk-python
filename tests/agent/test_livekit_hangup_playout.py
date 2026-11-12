@@ -89,12 +89,13 @@ class _FarewellAgent(Agent):
         if text:
             yield text
         if call:
+            name = "hang_up" if call is True else call
             yield ChatChunk(
                 id=f"c{self.turns}",
                 delta=ChoiceDelta(
                     role="assistant",
                     tool_calls=[
-                        FunctionToolCall(name="hang_up", arguments="{}", call_id=f"call_{self.turns}")
+                        FunctionToolCall(name=name, arguments="{}", call_id=f"call_{self.turns}")
                     ],
                 ),
             )
@@ -114,7 +115,13 @@ async def _run(script=None):  # noqa: ANN001, ANN202
     phone = ClawOpsPhoneTools()
     phone.set_call(call)
 
-    agent = _FarewellAgent([phone], script)
+    from livekit.agents.llm import function_tool
+
+    async def lookup_hours() -> str:
+        """영업시간을 조회한다."""
+        return "평일 9시~18시"
+
+    agent = _FarewellAgent([phone, function_tool(lookup_hours)], script)
     session = AgentSession(llm=_UnusedLLM(), tts=_UnusedTTS())
     session.output.audio = _PlayingOutput(timeline)
     await session.start(agent)
@@ -153,3 +160,17 @@ async def test_farewell_turn_that_calls_hang_up_again_hangs_up_once() -> None:
     assert timeline.count("hangup") == 1, timeline
     assert timeline.index("played") < timeline.index("hangup"), timeline
     assert agent.turns == 2
+
+
+async def test_earlier_step_speech_does_not_count_as_farewell() -> None:
+    """「확인해 볼게요」 → 조회 도구 → 말 없이 hang_up: 앞 단계의 말은 작별 인사가 아니다."""
+    from clawops.agent.livekit._toolset import HANG_UP_FAREWELL_PROMPT
+
+    timeline, agent = await _run(
+        [("확인해 볼게요.", "lookup_hours"), (None, True), ("네, 좋은 하루 보내세요.", False)]
+    )
+    assert timeline.count("hangup") == 1, timeline
+    assert timeline.count("played") == 2, timeline
+    assert timeline[-1] == "hangup", timeline
+    assert agent.turns == 3
+    assert HANG_UP_FAREWELL_PROMPT in agent.tool_outputs
