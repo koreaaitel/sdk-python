@@ -72,20 +72,32 @@ class _PlayingOutput(AudioOutput):
 
 
 class _FarewellAgent(Agent):
-    def __init__(self, tools: list) -> None:
+    """``script`` 의 한 줄 = LLM 응답 하나: (말할 문장 또는 None, hang_up 을 부르나)."""
+
+    def __init__(self, tools: list, script: "list[tuple[str | None, bool]] | None" = None) -> None:
         super().__init__(instructions="test", tools=tools)
         self.turns = 0
+        self.script = script or [("감사합니다. 좋은 하루 보내세요.", True)]
+        self.tool_outputs: list[str] = []
 
     async def llm_node(self, chat_ctx, tools, model_settings):  # noqa: ANN001, ANN201
+        for item in chat_ctx.items:
+            if item.type == "function_call_output" and item.output not in self.tool_outputs:
+                self.tool_outputs.append(item.output)
+        text, call = self.script[min(self.turns, len(self.script) - 1)]
         self.turns += 1
-        yield "감사합니다. 좋은 하루 보내세요."
-        yield ChatChunk(
-            id="c1",
-            delta=ChoiceDelta(
-                role="assistant",
-                tool_calls=[FunctionToolCall(name="hang_up", arguments="{}", call_id="call_1")],
-            ),
-        )
+        if text:
+            yield text
+        if call:
+            yield ChatChunk(
+                id=f"c{self.turns}",
+                delta=ChoiceDelta(
+                    role="assistant",
+                    tool_calls=[
+                        FunctionToolCall(name="hang_up", arguments="{}", call_id=f"call_{self.turns}")
+                    ],
+                ),
+            )
 
     async def tts_node(self, text, model_settings):  # noqa: ANN001, ANN201
         async for _ in text:
@@ -95,14 +107,14 @@ class _FarewellAgent(Agent):
         yield rtc.AudioFrame(b"\x00\x00" * n, SR, 1, n)
 
 
-async def test_hang_up_happens_after_farewell_is_played() -> None:
+async def _run(script=None):  # noqa: ANN001, ANN202
     timeline: list[str] = []
     call = CallSession(call_id="c", from_number="010", to_number="070", account_id="AC")
     call._hangup_fn = AsyncMock(side_effect=lambda: timeline.append("hangup"))
     phone = ClawOpsPhoneTools()
     phone.set_call(call)
 
-    agent = _FarewellAgent([phone])
+    agent = _FarewellAgent([phone], script)
     session = AgentSession(llm=_UnusedLLM(), tts=_UnusedTTS())
     session.output.audio = _PlayingOutput(timeline)
     await session.start(agent)
@@ -115,7 +127,29 @@ async def test_hang_up_happens_after_farewell_is_played() -> None:
         await asyncio.sleep(0.3)  # 끊은 뒤 응답이 더 생기는지 볼 틈
     finally:
         await session.aclose()
+    return timeline, agent
 
+
+async def test_hang_up_happens_after_farewell_is_played() -> None:
+    timeline, agent = await _run()
     assert "hangup" in timeline, timeline
     assert timeline.index("played") < timeline.index("hangup"), timeline  # 인사 재생이 끝난 뒤에 끊는다
     assert agent.turns == 1  # 끊은 뒤 LLM 을 또 부르지 않는다(StopResponse)
+
+
+async def test_tool_only_hang_up_asks_for_farewell_then_hangs_up() -> None:
+    """말 없이 hang_up 만 부른 응답: 인사 한 문장을 시키고, 그게 재생된 뒤 끊는다."""
+    from clawops.agent.livekit._toolset import HANG_UP_FAREWELL_PROMPT
+
+    timeline, agent = await _run([(None, True), ("네, 좋은 하루 보내세요.", False)])
+    assert timeline.count("hangup") == 1, timeline
+    assert timeline.index("played") < timeline.index("hangup"), timeline
+    assert agent.turns == 2
+    assert agent.tool_outputs == [HANG_UP_FAREWELL_PROMPT]
+
+
+async def test_farewell_turn_that_calls_hang_up_again_hangs_up_once() -> None:
+    timeline, agent = await _run([(None, True), ("네, 좋은 하루 보내세요.", True)])
+    assert timeline.count("hangup") == 1, timeline
+    assert timeline.index("played") < timeline.index("hangup"), timeline
+    assert agent.turns == 2

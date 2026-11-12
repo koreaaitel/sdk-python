@@ -32,6 +32,12 @@ log = logging.getLogger("clawops.agent.livekit")
 # hang_up 이 작별 인사 재생을 기다리는 상한. TTS 가 멈추거나 재생 완료 신호가 안 와도 통화는 끊는다.
 HANG_UP_PLAYOUT_CAP_S = 15.0
 
+# 말 없이 hang_up 만 부른 응답에 돌려주는 도구 결과. LiveKit 은 이걸 받고 같은 턴에서 한 번 더 응답한다.
+HANG_UP_FAREWELL_PROMPT = (
+    "통화 종료가 예약되었습니다. 지금 상대에게 짧은 작별 인사 한 문장만 말하세요. "
+    "질문하거나 새 이야기를 꺼내지 말고 도구도 부르지 마세요. 그 말이 끝나면 통화가 끊깁니다."
+)
+
 _HANG_UP_DESCRIPTION = (
     "End the phone call. Use when the conversation is finished or the caller says goodbye."
 )
@@ -55,6 +61,8 @@ class ClawOpsPhoneTools(Toolset):
         exclude_names: set[str] | None = None,
     ) -> None:
         self._call: CallSession | None = None
+        self._hung_up = False
+        self._hangup_after_turn: asyncio.Task[None] | None = None
 
         # (BuiltinTool, 핸들러, 설명, flags) — tool 이름은 enum.value 와 같다.
         # IGNORE_ON_ENTER: 인사말 도중 모델이 통화를 끊거나 전환하는 사고를 막는다.
@@ -110,13 +118,17 @@ class ClawOpsPhoneTools(Toolset):
     async def _hang_up(self, ctx: RunContext[None]) -> str:
         """End the phone call.
 
-        같은 응답에서 먼저 말한 작별 인사가 **다 재생된 뒤에** 끊는다. LiveKit 은 도구를 문장 음성
-        합성·재생과 동시에 돌리므로, 바로 끊으면 인사가 합성 도중 잘린다. 순서:
+        작별 인사가 **다 재생된 뒤에** 끊는다. LiveKit 은 도구를 문장 음성 합성·재생과 동시에 돌리므로,
+        바로 끊으면 인사가 합성 도중 잘린다. 순서:
 
         1. 끼어들기를 막는다 — 끊기로 정한 뒤 「네」 같은 맞장구가 인사를 끊으면 LiveKit 이 이 도구를
            취소해 통화가 안 끝난다. 이미 끼어들기가 일어났으면 끊지 않는다(발신자가 말을 이었다).
-        2. ``ctx.wait_for_playout()`` 을 :data:`HANG_UP_PLAYOUT_CAP_S` 상한으로 기다린다.
-        3. 끊고 ``StopResponse`` — 결과를 돌려주면 LiveKit 이 닫히는 회선에 대고 응답을 또 만든다.
+        2. ``ctx.wait_for_playout()`` 을 :data:`HANG_UP_PLAYOUT_CAP_S` 상한으로 기다린다 — 같은 응답에서
+           먼저 말한 인사.
+        3. 이 턴에 말한 것이 있으면 끊고 ``StopResponse`` — 결과를 돌려주면 LiveKit 이 닫히는 회선에 대고
+           응답을 또 만든다.
+        4. 말 없이 ``hang_up`` 만 부른 응답이면 끊지 않고 :data:`HANG_UP_FAREWELL_PROMPT` 를 돌려준다.
+           LiveKit 은 같은 턴에서 한 번 더 응답하고, 그 턴 전체의 재생이 끝나면 뒤에서 끊는다(상한 같음).
         """
         call = self._require_call()
         if ctx is not None:
@@ -132,8 +144,31 @@ class ClawOpsPhoneTools(Toolset):
                 )
             except Exception as e:  # noqa: BLE001 — 대기가 실패해도 끊기는 해야 한다
                 log.warning(f"hang_up: 재생 대기 실패, 그대로 끊는다: {e}")
-        await call.hangup()
+            speech = getattr(ctx, "speech_handle", None)
+            if self._hangup_after_turn is None and speech is not None and not _spoke_this_turn(speech):
+                # ⚠️ 이 도구의 태스크 안에서 speech.wait_for_playout() 을 부르면 LiveKit 이 순환 대기로
+                #    막는다. 새로 띄운 태스크는 도구 태스크 표식을 물려받지 않는다.
+                self._hangup_after_turn = asyncio.ensure_future(self._hang_up_after(speech, call))
+                return HANG_UP_FAREWELL_PROMPT
+        await self._hang_up_once(call)
         raise StopResponse()
+
+    async def _hang_up_after(self, speech: Any, call: CallSession) -> None:
+        try:
+            await asyncio.wait_for(speech.wait_for_playout(), HANG_UP_PLAYOUT_CAP_S)
+        except asyncio.TimeoutError:
+            log.warning(
+                f"hang_up: 작별 인사 턴이 {HANG_UP_PLAYOUT_CAP_S:.0f}초 안에 끝나지 않아 그대로 끊는다"
+            )
+        except Exception as e:  # noqa: BLE001 — 대기가 실패해도 끊기는 해야 한다
+            log.warning(f"hang_up: 작별 인사 턴 대기 실패, 그대로 끊는다: {e}")
+        await self._hang_up_once(call)
+
+    async def _hang_up_once(self, call: CallSession) -> None:
+        if self._hung_up:
+            return
+        self._hung_up = True
+        await call.hangup()
 
     async def _collect_dtmf(
         self,
@@ -269,6 +304,15 @@ class ClawOpsPhoneTools(Toolset):
         if is_call_over(result):
             raise StopResponse()
         return result
+
+
+def _spoke_this_turn(speech: Any) -> bool:
+    """이 턴(SpeechHandle)에서 에이전트가 실제로 말한 문장이 있었나."""
+    for item in getattr(speech, "chat_items", None) or []:
+        if getattr(item, "type", None) == "message" and getattr(item, "role", None) == "assistant":
+            if (getattr(item, "text_content", None) or "").strip():
+                return True
+    return False
 
 
 def _log_transfer_result(task: Any) -> None:
