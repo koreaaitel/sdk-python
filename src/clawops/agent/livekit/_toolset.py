@@ -35,10 +35,10 @@ HANG_UP_PLAYOUT_CAP_S = 15.0
 # 말 없이 hang_up 만 부른 응답에 돌려주는 도구 결과. LiveKit 은 이걸 받고 같은 턴에서 한 번 더 응답한다.
 # 에이전트 언어가 제각각이라 지시는 언어 중립으로 두고 「대화 언어로」 말하게 한다.
 HANG_UP_FAREWELL_PROMPT = (
-    "The call will end now. If your last message to the caller was already a goodbye, say nothing "
-    "more and output no text. Otherwise say one short goodbye sentence to the caller, in the same "
-    "language as this conversation. Do not ask anything, do not start a new topic, and do not call "
-    "any tools. The call hangs up as soon as you finish speaking."
+    "The call is ending. The caller hears only what you say next, so never describe ending, closing "
+    "or hanging up the call. If you already said goodbye to the caller, reply with an empty message. "
+    "Otherwise say one short goodbye sentence in the same language as this conversation. Do not ask "
+    "anything and do not call any tools."
 )
 
 # 응답을 스스로 새로 만드는 realtime 모델(도구 결과 뒤 응답이 새 발화로 온다)에서 그 발화가 생기길 기다리는 상한.

@@ -469,7 +469,7 @@ def test_farewell_prompt_is_language_neutral_and_skips_a_repeated_goodbye() -> N
     from clawops.agent.livekit._toolset import HANG_UP_FAREWELL_PROMPT
 
     assert "same language as this conversation" in HANG_UP_FAREWELL_PROMPT
-    assert "already a goodbye" in HANG_UP_FAREWELL_PROMPT
+    assert "already said goodbye" in HANG_UP_FAREWELL_PROMPT
 
 
 def test_replies_in_new_speech_reads_the_realtime_capability() -> None:
