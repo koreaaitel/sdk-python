@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.77.1 (2026-11-13)
+
+### Changed
+- 패키지 설명·작성자·문서 주소를 새 이름 「한국AI통신(Korea AI Telecom)」과 docs.koreaaitel.com 으로 바꿉니다. 코드·패키지 이름(`clawops`)은 바뀌지 않습니다.
+
 ## 0.77.0 (2026-11-12)
 
 ### Changed

@@ -1,6 +1,8 @@
-# ClawOps Python SDK
+# 한국AI통신 Python SDK
 
-[ClawOps Voice API](https://api.claw-ops.com/docs)의 공식 Python 라이브러리입니다.
+[한국AI통신](https://koreaaitel.com)(Korea AI Telecom, 옛 이름 ClawOps) API 의 공식 Python 라이브러리입니다.
+한국AI통신은 AI 에이전트를 위한 통화 인프라를 만드는 기간통신사업자입니다.
+문서는 [docs.koreaaitel.com](https://docs.koreaaitel.com) 에 있습니다. 패키지·클래스 이름(`clawops`, `ClawOps`)은 그대로입니다.
 
 [![PyPI version](https://img.shields.io/pypi/v/clawops.svg)](https://pypi.org/project/clawops/)
 [![Python 3.9+](https://img.shields.io/pypi/pyversions/clawops.svg)](https://pypi.org/project/clawops/)

@@ -5,11 +5,11 @@ build-backend = "hatchling.build"
 [project]
 name = "clawops"
 dynamic = ["version"]
-description = "The official Python library for the ClawOps Voice API"
+description = "Official Python SDK for 한국AI통신 (Korea AI Telecom, formerly ClawOps): Korean phone numbers, voice calls, and messaging API for AI agents"
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.9"
-authors = [{ name = "ClawOps", email = "hello@claw-ops.com" }]
+authors = [{ name = "한국AI통신 (Korea AI Telecom)", email = "hello@koreaaitel.com" }]
 classifiers = [
     "Intended Audience :: Developers",
     "License :: OSI Approved :: Apache Software License",
@@ -29,8 +29,8 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/koreaaitel/sdk-python"
-Documentation = "https://docs.claw-ops.com"
+Homepage = "https://koreaaitel.com"
+Documentation = "https://docs.koreaaitel.com"
 Repository = "https://github.com/koreaaitel/sdk-python"
 
 [tool.hatch.version]
