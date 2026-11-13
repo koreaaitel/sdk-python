@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "clawops"
 dynamic = ["version"]
-description = "Official Python SDK for 한국AI통신 (Korea AI Telecom, formerly ClawOps): Korean phone numbers, voice calls, and messaging API for AI agents"
+description = "Official Python SDK for 한국AI통신 (Korea AI Telecom): Korean phone numbers, voice calls, and messaging API for AI agents"
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.9"
