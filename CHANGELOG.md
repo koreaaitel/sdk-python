@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.77.2 (2026-11-16)
+
+### Added
+- `pip install koreaaitel`로 한국AI통신 Python SDK를 설치할 수 있습니다. 동일 버전의 `clawops`를 설치하며, 기존 설치 이름과 `import clawops`를 계속 사용할 수 있습니다.
+
 ## 0.77.1 (2026-11-13)
 
 ### Changed
