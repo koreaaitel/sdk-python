@@ -6,7 +6,7 @@
 ## 설치
 
 ```bash
-pip install 'clawops[livekit]'
+pip install "koreaaitel[livekit]"
 pip install 'livekit-plugins-openai' 'livekit-plugins-cartesia'   # 쓰는 플러그인만
 ```
 

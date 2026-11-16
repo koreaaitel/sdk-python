@@ -5,10 +5,10 @@ MCP(Model Context Protocol) 서버를 연결하여 AI에게 외부 도구를 제
 ## 설치
 
 ```bash
-pip install clawops[mcp]
+pip install "koreaaitel[mcp]"
 
 # 또는 agent와 함께
-pip install clawops[agent,mcp]
+pip install "koreaaitel[agent,mcp]"
 ```
 
 > `mcp` 패키지 없이 `mcp_servers`를 설정하면 `AgentError: MCP 서버를 사용하려면 pip install clawops[mcp] 를 실행하세요.` 에러가 발생합니다.

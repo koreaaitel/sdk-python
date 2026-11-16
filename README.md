@@ -4,24 +4,26 @@
 한국AI통신은 AI 에이전트를 위한 통화 인프라를 만드는 기간통신사업자입니다.
 문서는 [docs.koreaaitel.com](https://docs.koreaaitel.com) 에 있습니다.
 
-[![PyPI version](https://img.shields.io/pypi/v/clawops.svg)](https://pypi.org/project/clawops/)
-[![Python 3.9+](https://img.shields.io/pypi/pyversions/clawops.svg)](https://pypi.org/project/clawops/)
+[![PyPI version](https://img.shields.io/pypi/v/koreaaitel.svg)](https://pypi.org/project/koreaaitel/)
+[![Python 3.9+](https://img.shields.io/pypi/pyversions/koreaaitel.svg)](https://pypi.org/project/koreaaitel/)
 
 ## 설치
 
 ```bash
 # REST API SDK만 사용
-pip install clawops
+pip install koreaaitel
 
 # AI Agent 포함
-pip install clawops[agent]
+pip install "koreaaitel[agent]"
 
 # 특정 프로바이더 포함
-pip install clawops[agent,openai,deepgram,elevenlabs,mcp]
+pip install "koreaaitel[agent,openai,deepgram,elevenlabs,mcp]"
 
 # 전체 설치
-pip install clawops[agent-all]
+pip install "koreaaitel[agent-all]"
 ```
+
+기존 `pip install clawops`도 지원합니다. `koreaaitel`로 설치해도 Python 코드는 `import clawops`를 사용합니다.
 
 ## AI Agent (음성 에이전트)
 
@@ -127,7 +129,7 @@ async def on_start(call):
 MCP 서버를 연결하여 AI에게 외부 도구를 제공할 수 있습니다.
 
 ```bash
-pip install clawops[mcp]
+pip install "koreaaitel[mcp]"
 ```
 
 ```python
@@ -168,7 +170,7 @@ logging.getLogger("clawops.agent").setLevel(logging.DEBUG)
 통화 흐름, MCP 도구 호출, LLM 세션을 OpenTelemetry로 추적할 수 있습니다.
 
 ```bash
-pip install clawops[tracing]
+pip install "koreaaitel[tracing]"
 # + 원하는 exporter
 pip install opentelemetry-sdk opentelemetry-exporter-otlp
 ```

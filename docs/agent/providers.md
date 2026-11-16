@@ -58,26 +58,26 @@ STT → LLM → TTS를 개별 조합하는 방식입니다. `PipelineSession`에
 
 ```bash
 # Realtime (검증 완료)
-pip install clawops[openai]         # OpenAI Realtime + OpenAI LLM
+pip install "koreaaitel[openai]"         # OpenAI Realtime + OpenAI LLM
 
 # Realtime (검증 전)
-pip install clawops[gemini]     # Gemini Realtime + Gemini LLM
+pip install "koreaaitel[gemini]"     # Gemini Realtime + Gemini LLM
 
 # Pipeline 개별 제공자 (검증 전)
-pip install clawops[deepgram]       # Deepgram STT
-pip install clawops[elevenlabs]     # ElevenLabs TTS
-pip install clawops[anthropic-llm]  # Anthropic LLM
-pip install clawops[ollama]         # Ollama LLM
-pip install clawops[mistral]        # Mistral LLM
-pip install clawops[groq]           # Groq LLM
-pip install clawops[perplexity]     # Perplexity LLM
-pip install clawops[together]       # Together AI LLM
-pip install clawops[fireworks]      # Fireworks AI LLM
-pip install clawops[deepseek]       # DeepSeek LLM
-pip install clawops[xai]            # xAI LLM
+pip install "koreaaitel[deepgram]"       # Deepgram STT
+pip install "koreaaitel[elevenlabs]"     # ElevenLabs TTS
+pip install "koreaaitel[anthropic-llm]"  # Anthropic LLM
+pip install "koreaaitel[ollama]"         # Ollama LLM
+pip install "koreaaitel[mistral]"        # Mistral LLM
+pip install "koreaaitel[groq]"           # Groq LLM
+pip install "koreaaitel[perplexity]"     # Perplexity LLM
+pip install "koreaaitel[together]"       # Together AI LLM
+pip install "koreaaitel[fireworks]"      # Fireworks AI LLM
+pip install "koreaaitel[deepseek]"       # DeepSeek LLM
+pip install "koreaaitel[xai]"            # xAI LLM
 
 # 전체 설치
-pip install clawops[agent-all]
+pip install "koreaaitel[agent-all]"
 ```
 
 ## 세션 타입별 비교
