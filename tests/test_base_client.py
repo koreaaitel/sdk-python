@@ -31,7 +31,7 @@ class TestSyncAPIClient:
 
     @respx.mock
     def test_get_success(self):
-        respx.get("https://api.claw-ops.com/test").mock(
+        respx.get("https://api.koreaaitel.com/test").mock(
             return_value=httpx.Response(200, json={"message": "ok"})
         )
         client = self._make_client()
@@ -42,7 +42,7 @@ class TestSyncAPIClient:
 
     @respx.mock
     def test_post_success(self):
-        respx.post("https://api.claw-ops.com/test").mock(
+        respx.post("https://api.koreaaitel.com/test").mock(
             return_value=httpx.Response(201, json={"message": "created"})
         )
         client = self._make_client()
@@ -52,7 +52,7 @@ class TestSyncAPIClient:
 
     @respx.mock
     def test_404_raises_not_found(self):
-        respx.get("https://api.claw-ops.com/test").mock(
+        respx.get("https://api.koreaaitel.com/test").mock(
             return_value=httpx.Response(404, json={"error": "not found"})
         )
         client = self._make_client()
@@ -64,7 +64,7 @@ class TestSyncAPIClient:
 
     @respx.mock
     def test_401_raises_authentication_error(self):
-        respx.get("https://api.claw-ops.com/test").mock(
+        respx.get("https://api.koreaaitel.com/test").mock(
             return_value=httpx.Response(401, json={"error": "invalid key"})
         )
         client = self._make_client()
@@ -74,7 +74,7 @@ class TestSyncAPIClient:
 
     @respx.mock
     def test_retry_on_500(self):
-        route = respx.get("https://api.claw-ops.com/test")
+        route = respx.get("https://api.koreaaitel.com/test")
         route.side_effect = [
             httpx.Response(500, json={"error": "server error"}),
             httpx.Response(200, json={"message": "ok"}),
@@ -87,7 +87,7 @@ class TestSyncAPIClient:
 
     @respx.mock
     def test_delete_returns_none(self):
-        respx.delete("https://api.claw-ops.com/test").mock(
+        respx.delete("https://api.koreaaitel.com/test").mock(
             return_value=httpx.Response(204)
         )
         client = self._make_client()
@@ -101,7 +101,7 @@ class TestSyncAPIClient:
 
     @respx.mock
     def test_extra_headers_override(self):
-        route = respx.get("https://api.claw-ops.com/test").mock(
+        route = respx.get("https://api.koreaaitel.com/test").mock(
             return_value=httpx.Response(200, json={"message": "ok"})
         )
         client = self._make_client()
@@ -111,7 +111,7 @@ class TestSyncAPIClient:
 
     @respx.mock
     def test_extra_query_params(self):
-        route = respx.get("https://api.claw-ops.com/test").mock(
+        route = respx.get("https://api.koreaaitel.com/test").mock(
             return_value=httpx.Response(200, json={"message": "ok"})
         )
         client = self._make_client()
@@ -132,7 +132,7 @@ class TestAsyncAPIClient:
     @respx.mock
     @pytest.mark.asyncio
     async def test_get_success(self):
-        respx.get("https://api.claw-ops.com/test").mock(
+        respx.get("https://api.koreaaitel.com/test").mock(
             return_value=httpx.Response(200, json={"message": "ok"})
         )
         client = self._make_client()
@@ -143,7 +143,7 @@ class TestAsyncAPIClient:
     @respx.mock
     @pytest.mark.asyncio
     async def test_404_raises_not_found(self):
-        respx.get("https://api.claw-ops.com/test").mock(
+        respx.get("https://api.koreaaitel.com/test").mock(
             return_value=httpx.Response(404, json={"error": "not found"})
         )
         client = self._make_client()

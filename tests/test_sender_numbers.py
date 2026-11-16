@@ -12,7 +12,7 @@ from clawops.resources.sender_numbers import AsyncSenderNumbers, SenderNumbers
 from clawops.types.number import ProvisionedPhoneNumber
 from clawops.types.sender_number import SenderNumber, SenderNumberList
 
-BASE = "https://api.claw-ops.com"
+BASE = "https://api.koreaaitel.com"
 ACCOUNT = "AC1a2b3c4d"
 PATH = f"/v1/accounts/{ACCOUNT}/sender-numbers"
 

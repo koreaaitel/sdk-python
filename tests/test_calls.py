@@ -8,7 +8,7 @@ from clawops.resources.calls import Calls
 from clawops.types.call import Call, CallControlResponse
 from clawops.types.transcript import TranscriptRequestAccepted, TranscriptStatus
 
-BASE = "https://api.claw-ops.com"
+BASE = "https://api.koreaaitel.com"
 ACCOUNT = "AC1a2b3c4d"
 CALLS_PATH = f"/v1/accounts/{ACCOUNT}/calls"
 

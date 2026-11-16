@@ -722,7 +722,7 @@ client = ClawOps(
 | -------------------- | ---------------------- | ------------------------------------------- |
 | `CLAWOPS_API_KEY`    | API 키 (`sk_...`)      | 예 (생성자에 전달하지 않은 경우)            |
 | `CLAWOPS_ACCOUNT_ID` | 기본 계정 ID (`AC...`) | 예 (생성자에 전달하지 않은 경우)            |
-| `CLAWOPS_BASE_URL`   | API 기본 URL           | 아니오 (기본값: `https://api.claw-ops.com`) |
+| `CLAWOPS_BASE_URL`   | API 기본 URL           | 아니오 (기본값: `https://api.koreaaitel.com`) |
 | `OPENAI_API_KEY`     | OpenAI API 키          | OpenAI Realtime 사용 시                     |
 | `GOOGLE_API_KEY`     | Google API 키          | Gemini Realtime 사용 시                     |
 

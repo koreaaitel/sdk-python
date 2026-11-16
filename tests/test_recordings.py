@@ -6,7 +6,7 @@ from clawops._base_client import AsyncAPIClient, SyncAPIClient
 from clawops.resources.recordings import Recordings, AsyncRecordings
 
 
-BASE = "https://api.claw-ops.com"
+BASE = "https://api.koreaaitel.com"
 ACCOUNT = "AC1a2b3c4d"
 RECORDINGS_PATH = f"/v1/accounts/{ACCOUNT}/recordings"
 

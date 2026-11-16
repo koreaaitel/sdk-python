@@ -14,7 +14,7 @@ from clawops.types.kakao import (
     KakaoTokenRequest,
 )
 
-BASE = "https://api.claw-ops.com"
+BASE = "https://api.koreaaitel.com"
 ACCOUNT = "AC1a2b3c4d"
 CHANNELS = f"/v1/accounts/{ACCOUNT}/kakao/channels"
 TEMPLATES = f"/v1/accounts/{ACCOUNT}/kakao/templates"

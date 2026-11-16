@@ -7,7 +7,7 @@ from clawops._base_client import SyncAPIClient
 from clawops.resources.numbers import Numbers
 from clawops.types.number import PhoneNumber, NumberListItem, NumberUpdateResponse
 
-BASE = "https://api.claw-ops.com"
+BASE = "https://api.koreaaitel.com"
 ACCOUNT = "AC1a2b3c4d"
 NUMBERS_PATH = f"/v1/accounts/{ACCOUNT}/numbers"
 
