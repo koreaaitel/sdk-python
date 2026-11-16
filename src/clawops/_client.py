@@ -42,7 +42,7 @@ class ClawOps(SyncAPIClient):
     Args:
         api_key: API 키 (sk_...). 생략 시 CLAWOPS_API_KEY 환경변수 사용.
         account_id: 기본 계정 ID (AC...). 생략 시 CLAWOPS_ACCOUNT_ID 환경변수 사용.
-        base_url: API 기본 URL. 기본값: https://api.claw-ops.com
+        base_url: API 기본 URL. 기본값: https://api.koreaaitel.com
         timeout: 요청 타임아웃 (초 또는 httpx.Timeout). 기본값: 600초.
         max_retries: 최대 재시도 횟수. 기본값: 2.
         http_client: 커스텀 httpx.Client 인스턴스.

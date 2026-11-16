@@ -14,6 +14,7 @@ import time
 import inspect
 from typing import Any, Awaitable, Callable, Literal, TypedDict, TypeVar, Union
 
+from .._constants import DEFAULT_BASE_URL
 from .._exceptions import AgentAuthRejectedError, AgentConnectionError, AgentError
 from ._builtin_tools import BuiltinTool, resolve_builtin_tools
 from ._control_ws import CLOSE_REPLACED, ControlWebSocket
@@ -172,7 +173,7 @@ class ClawOpsAgent:
             raise AgentError("account_id를 지정하거나 CLAWOPS_ACCOUNT_ID 환경변수를 설정하세요.")
 
         if base_url is None:
-            base_url = os.environ.get("CLAWOPS_BASE_URL", "https://api.claw-ops.com")
+            base_url = os.environ.get("CLAWOPS_BASE_URL", DEFAULT_BASE_URL)
 
         if (session is None) == (session_factory is None):
             raise AgentError(

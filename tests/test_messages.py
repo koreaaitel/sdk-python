@@ -7,7 +7,7 @@ from clawops._base_client import SyncAPIClient
 from clawops.resources.messages import Messages
 from clawops.types.message import Message
 
-BASE = "https://api.claw-ops.com"
+BASE = "https://api.koreaaitel.com"
 ACCOUNT = "AC1a2b3c4d"
 MESSAGES_PATH = f"/v1/accounts/{ACCOUNT}/messages"
 

@@ -7,7 +7,7 @@ from clawops.resources.calls import Calls, AsyncCalls
 from clawops.resources.numbers import Numbers, AsyncNumbers
 from clawops._exceptions import ClawOpsError
 
-BASE = "https://api.claw-ops.com"
+BASE = "https://api.koreaaitel.com"
 
 
 class TestClawOpsClient:

@@ -8,7 +8,7 @@ from clawops._base_client import AsyncAPIClient, SyncAPIClient
 from clawops.resources.blocked_recipients import AsyncBlockedRecipients, BlockedRecipients
 from clawops.types.blocked_recipient import BlockedRecipient
 
-BASE = "https://api.claw-ops.com"
+BASE = "https://api.koreaaitel.com"
 ACCOUNT = "AC1a2b3c4d"
 PATH = f"/v1/accounts/{ACCOUNT}/blocked-recipients"
 

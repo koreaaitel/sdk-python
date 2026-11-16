@@ -9,7 +9,7 @@ import respx
 
 from clawops import ClawOps, AsyncClawOps, NotFoundError
 
-BASE = "https://api.claw-ops.com"
+BASE = "https://api.koreaaitel.com"
 ACCOUNT = "AC1a2b3c4d"
 
 CALL_RESPONSE = {

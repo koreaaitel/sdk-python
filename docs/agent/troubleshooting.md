@@ -37,7 +37,7 @@ except AgentAuthRejectedError as err:
 서버 연결 시 아래와 같은 에러가 반복 출력됩니다.
 
 ```
-Control WS error: Cannot connect to host api.claw-ops.com:443 ssl:True [SSLCertVerificationError: (1, '[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: unable to get local issuer certificate (_ssl.c:1028)')]
+Control WS error: Cannot connect to host api.koreaaitel.com:443 ssl:True [SSLCertVerificationError: (1, '[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: unable to get local issuer certificate (_ssl.c:1028)')]
 ```
 
 ### 원인
@@ -122,7 +122,7 @@ print(certifi.where())
 | API 키        | `CLAWOPS_API_KEY`가 `sk_`로 시작하는 유효한 키인지 확인                       |
 | 계정 ID       | `CLAWOPS_ACCOUNT_ID`가 `AC`로 시작하는 유효한 ID인지 확인                     |
 | 전화번호      | `from_`에 지정한 번호가 계정에 등록된 번호인지 확인                           |
-| 네트워크      | `api.claw-ops.com:443`으로의 아웃바운드 WebSocket(WSS) 연결이 허용되는지 확인 |
+| 네트워크      | `api.koreaaitel.com:443`으로의 아웃바운드 WebSocket(WSS) 연결이 허용되는지 확인 |
 | 방화벽/프록시 | 기업 네트워크에서 WebSocket 프로토콜이 차단되지 않는지 확인                   |
 
 ---

@@ -19,7 +19,7 @@ import respx
 from clawops import AsyncClawOps, ClawOps
 from clawops._exceptions import APIResponseValidationError, ClawOpsError
 
-BASE = "https://api.claw-ops.com"
+BASE = "https://api.koreaaitel.com"
 ACCOUNT = "AC1a2b3c4d"
 ROOT = f"{BASE}/v1/accounts/{ACCOUNT}"
 
