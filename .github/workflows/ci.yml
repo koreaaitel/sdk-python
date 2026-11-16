@@ -43,6 +43,31 @@ jobs:
             src/clawops/_client.py \
             tests/typing
 
+  package-install:
+    name: Install both PyPI distribution names
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install build
+      - run: |
+          packages="$(mktemp -d)"
+          python -m build --wheel --outdir "$packages"
+          python scripts/build_koreaaitel.py "$packages"
+          version="$(python -c 'from runpy import run_path; print(run_path("src/clawops/_version.py")["__version__"])')"
+          for package in clawops 'koreaaitel[agent]'; do
+            venv="$(mktemp -d)"
+            python -m venv "$venv"
+            "$venv/bin/python" -m pip install --find-links "$packages" "$package==$version"
+            "$venv/bin/python" -m pip check
+            "$venv/bin/python" -c 'from clawops import ClawOps, AsyncClawOps'
+            if [[ "$package" == 'koreaaitel[agent]' ]]; then
+              "$venv/bin/python" -c 'import clawops.agent; from importlib.metadata import version; assert version("koreaaitel") == version("clawops")'
+            fi
+          done
+
   import-py39:
     name: import (3.9 하한)
     # ubuntu-latest(26.04) 이미지에는 setup-python 이 3.9 를 받을 수 없다 — 3.9 가 있는 이미지로 고정한다.
