@@ -18,7 +18,7 @@
 ## 1. SDK 설치
 
 ```bash
-pip install "clawops[agent]>=0.55.0"
+pip install "koreaaitel[agent]"
 ```
 
 ```bash

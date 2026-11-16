@@ -5,7 +5,7 @@
 ## 설치
 
 ```bash
-pip install clawops[tracing]
+pip install "koreaaitel[tracing]"
 
 # + exporter
 pip install opentelemetry-sdk opentelemetry-exporter-otlp

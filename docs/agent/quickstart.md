@@ -4,23 +4,25 @@
 
 ```bash
 # 기본 (OpenAI Realtime 모드)
-pip install clawops[agent,openai]
+pip install "koreaaitel[agent,openai]"
 
 # 파이프라인 모드
-pip install clawops[agent,deepgram,elevenlabs,openai]    # OpenAI LLM
-pip install clawops[agent,deepgram,elevenlabs,anthropic-llm]  # Anthropic LLM
-pip install clawops[agent,deepgram,elevenlabs,gemini]    # Gemini LLM
-pip install clawops[agent,deepgram,elevenlabs,ollama]        # Ollama (로컬)
+pip install "koreaaitel[agent,deepgram,elevenlabs,openai]"    # OpenAI LLM
+pip install "koreaaitel[agent,deepgram,elevenlabs,anthropic-llm]"  # Anthropic LLM
+pip install "koreaaitel[agent,deepgram,elevenlabs,gemini]"    # Gemini LLM
+pip install "koreaaitel[agent,deepgram,elevenlabs,ollama]"        # Ollama (로컬)
 
 # MCP 서버 지원 포함
-pip install clawops[agent,mcp]
+pip install "koreaaitel[agent,mcp]"
 
 # 전체 설치
-pip install clawops[agent-all]
+pip install "koreaaitel[agent-all]"
 
 # LiveKit Agents 실행 — docs/agent/livekit.md 참조
-pip install 'clawops[livekit]'
+pip install "koreaaitel[livekit]"
 ```
+
+기존 `pip install clawops`도 지원합니다. `koreaaitel`로 설치해도 Python 코드는 `import clawops`를 사용합니다.
 
 ## 환경변수
 
