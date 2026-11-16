@@ -53,3 +53,20 @@ jobs:
           gh release create "v${VERSION}" dist/* \
             --title "v${VERSION}" \
             --generate-notes
+
+  publish-koreaaitel:
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install build
+      - run: python scripts/build_koreaaitel.py dist-koreaaitel
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist-koreaaitel
