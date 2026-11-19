@@ -19,7 +19,7 @@ from .llm import (
     DeepSeekLLM,
     XaiLLM,
 )
-from .tts import ElevenLabsTTS
+from .tts import ElevenLabsTTS, TypecastTTS
 from ._pipeline_session import PipelineSession
 
 if TYPE_CHECKING:
@@ -33,7 +33,7 @@ __all__ = [
     "OpenAICompatibleLLM", "OllamaLLM",
     "MistralLLM", "GroqLLM", "PerplexityLLM",
     "TogetherLLM", "FireworksLLM", "DeepSeekLLM", "XaiLLM",
-    "ElevenLabsTTS",
+    "ElevenLabsTTS", "TypecastTTS",
     "PipelineSession",
     "OpenAIRealtime",
     "GeminiRealtime",
