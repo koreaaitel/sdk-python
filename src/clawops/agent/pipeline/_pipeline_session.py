@@ -300,25 +300,34 @@ class PipelineSession:
             tts_sample_rate = getattr(self._tts, "sample_rate", 24000)
             self._sent_audio_chunks = 0
 
-            async for audio in self._tts.synthesize(tee_text()):
-                if not self._running or not self._call:
-                    log.warning("TTS audio received but session stopped")
-                    break
-                pcm8k = resample_pcm16(audio, from_rate=tts_sample_rate, to_rate=8000)
-                ulaw = pcm16_to_ulaw(pcm8k)
-                # delta 를 **자르지도 채우지도 않고** 그대로 넘긴다.
-                #
-                # 예전엔 여기서 160바이트로 자르고 자투리를 무음으로 채웠다. 이월이
-                # 없어서 **delta 마다** 0~19ms 무음이 박혔다 — livekit 경로(세그먼트당
-                # 1회)보다 훨씬 잦다. 프레이밍은 20ms 클럭을 쥔 엔진 몫이다.
-                if not self._first_audio_logged:
-                    from ._buffering_call import log_first_realtime_audio
+            audio_stream = self._tts.synthesize(tee_text())
+            try:
+                async for audio in audio_stream:
+                    if not self._running or not self._call:
+                        log.warning("TTS audio received but session stopped")
+                        break
+                    pcm8k = resample_pcm16(audio, from_rate=tts_sample_rate, to_rate=8000)
+                    if not pcm8k:
+                        continue
+                    ulaw = pcm16_to_ulaw(pcm8k)
+                    # delta 를 **자르지도 채우지도 않고** 그대로 넘긴다.
+                    #
+                    # 예전엔 여기서 160바이트로 자르고 자투리를 무음으로 채웠다. 이월이
+                    # 없어서 **delta 마다** 0~19ms 무음이 박혔다 — livekit 경로(세그먼트당
+                    # 1회)보다 훨씬 잦다. 프레이밍은 20ms 클럭을 쥔 엔진 몫이다.
+                    if not self._first_audio_logged:
+                        from ._buffering_call import log_first_realtime_audio
 
-                    log_first_realtime_audio(self._call)
-                    self._first_audio_logged = True
-                await self._call.send_audio(ulaw)
-                # barge-in 게이트용 `> 0` 플래그다 — 정확한 청크 수가 아니어도 된다.
-                self._sent_audio_chunks += 1
+                        log_first_realtime_audio(self._call)
+                        self._first_audio_logged = True
+                    await self._call.send_audio(ulaw)
+                    # barge-in 게이트용 `> 0` 플래그다 — 정확한 청크 수가 아니어도 된다.
+                    self._sent_audio_chunks += 1
+            finally:
+                # Cancellation while sending audio leaves the iterator paused at its yield.
+                close_audio = getattr(audio_stream, "aclose", None)
+                if callable(close_audio):
+                    await close_audio()
 
             assistant_text = "".join(text_chunks)
             if assistant_text.strip():

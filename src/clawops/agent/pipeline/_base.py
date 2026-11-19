@@ -80,6 +80,6 @@ class LLM(Protocol):
 
 @runtime_checkable
 class TTS(Protocol):
-    async def synthesize(self, text_stream: AsyncIterator[str]) -> AsyncIterator[bytes]:
+    def synthesize(self, text_stream: AsyncIterator[str]) -> AsyncIterator[bytes]:
         """텍스트 스트림 -> 오디오(PCM16) 스트림."""
         ...
