@@ -99,6 +99,7 @@ async def screen(call: IncomingCall):
 | `from_number` | `str` | 발신 번호. 번호 표시제한 통화도 번호는 그대로 옵니다 |
 | `to_number` | `str` | 수신 번호(이 에이전트의 번호) |
 | `caller_id_restricted` | `bool` | 발신자가 번호 표시제한을 걸고 건 통화면 `True` |
+| `forwarded_from` | `str \| None` | 착신전환으로 들어온 통화에서 발신자가 원래 건 번호. 착신전환을 실행한 통신사가 전환 정보를 함께 보내온 경우에만 값이 있고, 직접 걸려온 통화는 `None` (0.65.0부터) |
 | `reject(reason="rejected")` | | 거절합니다. `reason` 은 `"rejected"`(기본, SIP 403) 또는 `"busy"`(SIP 486). 그 밖의 값은 `ValueError` |
 | `transfer(to, ...)` | | AI 없이 받아서 `to` 로 넘깁니다. 위 절 참고 |
 
