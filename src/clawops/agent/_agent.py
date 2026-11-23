@@ -13,10 +13,13 @@ import re
 import signal
 import time
 import inspect
-from typing import Any, Awaitable, Callable, Literal, TypedDict, TypeVar, Union
+from typing import Any, Awaitable, Callable, Literal, TypedDict, TypeVar, Union, overload
+
+from typing_extensions import Required, TypeAlias, Unpack
 
 from .._constants import DEFAULT_BASE_URL
 from .._exceptions import AgentAuthRejectedError, AgentConnectionError, AgentError
+from ..types.call_params import CallerIdMode
 from ._builtin_tools import BuiltinTool, resolve_builtin_tools
 from ._control_ws import CLOSE_REPLACED, ControlWebSocket
 from ._health import start_health_server
@@ -140,7 +143,49 @@ class ToolConfig(TypedDict, total=False):
     """Tool 실행 중 재생할 hold audio. True=기본 차임, str=wav 파일 경로, bytes=raw ulaw."""
 
 
+class _AgentOptions(TypedDict, total=False):
+    api_key: str | None
+    account_id: str | None
+    base_url: str | None
+    session: Session | None
+    session_factory: Callable[[], Session] | None
+    mcp_servers: list[Any] | None
+    recording: bool
+    recording_path: str
+    tracing: TracingConfig | None
+    builtin_tools: BuiltinTool | list[BuiltinTool]
+    passive_dtmf_debounce_ms: int
+    passive_dtmf_finish_key: str | None
+    passive_dtmf_max_digits: int | None
+    tool_config: ToolConfig | None
+    rx_gain: float
+    tx_gain: float
+    prewarm_enabled: bool
+    machine_detection: Literal["Enable", "Hangup"] | None
+    on_taken_over: Callable[[int, str], None] | None
+
+
+class _NumberAgentOptions(_AgentOptions, total=False):
+    from_: Required[str]
+    sdk_agent_id: None
+
+
+class _SdkIdAgentOptions(_AgentOptions, total=False):
+    sdk_agent_id: Required[str]
+    from_: None
+
+
+ClawOpsAgentOptions: TypeAlias = Union[_NumberAgentOptions, _SdkIdAgentOptions]
+"""번호 또는 SDK ID로 연결하는 에이전트 설정."""
+
+
 class ClawOpsAgent:
+    @overload
+    def __init__(self, **kwargs: Unpack[_NumberAgentOptions]) -> None: ...
+
+    @overload
+    def __init__(self, **kwargs: Unpack[_SdkIdAgentOptions]) -> None: ...
+
     def __init__(
         self,
         *,
@@ -855,7 +900,7 @@ class ClawOpsAgent:
         *,
         timeout: int = 60,
         machine_detection: Literal["Enable", "Hangup"] | None = None,
-        caller_id_mode: Literal["shared-010"] | None = None,
+        caller_id_mode: CallerIdMode | None = None,
     ) -> CallSession:
         """발신 전화를 건다. CallSession을 즉시 리턴 (queued 상태).
 

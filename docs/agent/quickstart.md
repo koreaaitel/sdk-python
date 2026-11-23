@@ -380,6 +380,8 @@ finally:
 
 SDK ID 연결은 발신 전용입니다. 계정의 기존 번호로 수신하는 에이전트는 `from_`을 사용하고, 공용 010이 필요한 통화에만 `await agent.call(to, caller_id_mode="shared-010")`을 호출하세요. 그때 `call.from_number`에는 기존 계정 번호, `call.presented_from`에는 이번 통화에 배정된 공용 010이 들어갑니다.
 
+설정을 딕셔너리로 보관할 때는 `clawops.agent.ClawOpsAgentOptions`를 사용하세요. REST의 `client.calls.create()`에 넘길 공용 010 요청은 `clawops.types.Shared010CallCreateParams`로 선언할 수 있습니다. 타입 검사기가 연결 대상 누락과 동시에 사용할 수 없는 옵션을 확인합니다.
+
 ### 발신 결과 확인하기
 
 `await session.wait()` 는 **상대가 받지 않아도** 발신이 취소되는 시점에 리턴합니다.

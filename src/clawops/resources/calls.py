@@ -1,12 +1,23 @@
 from __future__ import annotations
 
-from typing import Literal
+from typing import Literal, overload
+
+from typing_extensions import Unpack
 
 from .._resource import AsyncAPIResource, SyncAPIResource
 from .._utils import strip_not_given
 from ..pagination import AsyncPage, SyncPage
 from ..types.call import Call, CallControlResponse
-from ..types.call_params import CallContextParam
+from ..types.call_params import (
+    CallContextParam,
+    CallCreateParams,
+    CallerIdMode,
+    _Shared010FlowCall,
+    _Shared010ManagedCall,
+    _Shared010NumberCall,
+    _Shared010SdkCall,
+    _Shared010VoiceMLCall,
+)
 from ..types.summary import SummaryStatus
 from ..types.transcript import TranscriptRequestAccepted, TranscriptStatus
 
@@ -30,12 +41,30 @@ def _call_context_body(ctx: CallContextParam | None) -> dict[str, object] | None
 class Calls(SyncAPIResource):
     """통화(Calls) 리소스. 아웃바운드 전화 발신, 통화 목록 조회, 단건 조회, 통화 제어(종료)."""
 
+    @overload
+    def create(self, **kwargs: Unpack[CallCreateParams]) -> Call: ...
+
+    @overload
+    def create(self, **kwargs: Unpack[_Shared010NumberCall]) -> Call: ...
+
+    @overload
+    def create(self, **kwargs: Unpack[_Shared010SdkCall]) -> Call: ...
+
+    @overload
+    def create(self, **kwargs: Unpack[_Shared010ManagedCall]) -> Call: ...
+
+    @overload
+    def create(self, **kwargs: Unpack[_Shared010VoiceMLCall]) -> Call: ...
+
+    @overload
+    def create(self, **kwargs: Unpack[_Shared010FlowCall]) -> Call: ...
+
     def create(
         self,
         *,
         to: str,
         from_: str | None = None,
-        caller_id_mode: Literal["shared-010"] | None = None,
+        caller_id_mode: CallerIdMode | None = None,
         sdk_agent_id: str | None = None,
         url: str | None = None,
         agent_id: str | None = None,
@@ -347,12 +376,30 @@ class Calls(SyncAPIResource):
 class AsyncCalls(AsyncAPIResource):
     """통화(Calls) 비동기 리소스. Calls의 async 버전."""
 
+    @overload
+    async def create(self, **kwargs: Unpack[CallCreateParams]) -> Call: ...
+
+    @overload
+    async def create(self, **kwargs: Unpack[_Shared010NumberCall]) -> Call: ...
+
+    @overload
+    async def create(self, **kwargs: Unpack[_Shared010SdkCall]) -> Call: ...
+
+    @overload
+    async def create(self, **kwargs: Unpack[_Shared010ManagedCall]) -> Call: ...
+
+    @overload
+    async def create(self, **kwargs: Unpack[_Shared010VoiceMLCall]) -> Call: ...
+
+    @overload
+    async def create(self, **kwargs: Unpack[_Shared010FlowCall]) -> Call: ...
+
     async def create(
         self,
         *,
         to: str,
         from_: str | None = None,
-        caller_id_mode: Literal["shared-010"] | None = None,
+        caller_id_mode: CallerIdMode | None = None,
         sdk_agent_id: str | None = None,
         url: str | None = None,
         agent_id: str | None = None,
