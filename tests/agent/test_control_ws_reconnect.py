@@ -77,6 +77,39 @@ async def _client(server: _Server, seen: list[tuple[int, str]] | None = None) ->
     )
 
 
+async def test_numberless_connection_waits_for_agent_ready():
+    server = _Server()
+    await server.start()
+
+    async def noop(_data: dict) -> None:
+        return None
+
+    async def wait_for_upgrade() -> None:
+        while not server.accepted:
+            await asyncio.sleep(0.01)
+
+    ws = ControlWebSocket(
+        base_url=server.base_url,
+        api_key="key",
+        account_id="AC1",
+        sdk_agent_id="front-desk",
+        on_call_incoming=noop,
+        on_call_ended=noop,
+    )
+    task = asyncio.create_task(ws.connect())
+    try:
+        await asyncio.wait_for(wait_for_upgrade(), timeout=5)
+        with pytest.raises(asyncio.TimeoutError):
+            await ws.wait_connected(timeout=0.05)
+        await server.accepted[0].send_json({"event": "agent.ready"})
+        await ws.wait_connected(timeout=5)
+    finally:
+        await ws.close()
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        await server.stop()
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("code", [CLOSE_REPLACED, CLOSE_OWNERSHIP_LOST])
 async def test_does_not_reconnect_after_terminal_close(code: int) -> None:

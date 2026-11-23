@@ -3,6 +3,7 @@ import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from clawops._exceptions import AgentError
 from clawops.agent import ClawOpsAgent
 from clawops.agent.pipeline.realtime._openai import OpenAIRealtime
 
@@ -26,6 +27,23 @@ def test_agent_creation():
     assert agent._tx_gain == 1.2
     # machine_detection default 는 None (미지정 시 AMD 비활성)
     assert agent._machine_detection is None
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        {},
+        {"from_": "07012341234", "sdk_agent_id": "desk"},
+        {"sdk_agent_id": "-desk"},
+        {"sdk_agent_id": "desk\n"},
+        {"sdk_agent_id": "a" * 65},
+    ],
+)
+def test_agent_connection_target_validation(target):
+    with pytest.raises(AgentError, match="sdk_agent_id"):
+        ClawOpsAgent(
+            api_key="sk_test", account_id="AC_test", session=_make_session(), **target
+        )
 
 
 def test_agent_machine_detection_default():
@@ -238,11 +256,11 @@ async def test_outbound_ready_does_not_double_prewarm_after_ringing():
         first_task.cancel()
 
 
-def _mock_originate_ok():
+def _mock_originate_ok(payload=None, *, json_side_effect=None):
     """aiohttp POST → 201 {"callId": "CO1"} 모킹 컨텍스트. (http_session, patch_target)."""
     resp = MagicMock()
     resp.status = 201
-    resp.json = AsyncMock(return_value={"callId": "CO1"})
+    resp.json = AsyncMock(return_value=payload or {"callId": "CO1"}, side_effect=json_side_effect)
     post_ctx = MagicMock()
     post_ctx.__aenter__ = AsyncMock(return_value=resp)
     post_ctx.__aexit__ = AsyncMock(return_value=False)
@@ -256,6 +274,115 @@ def _mock_originate_ok():
 
 def _posted_body(http_session) -> dict:
     return http_session.post.call_args.kwargs["json"]
+
+
+@pytest.mark.parametrize(
+    ("target", "call_options", "expected_fields", "expected_from"),
+    [
+        ({"from_": "07012341234"}, {}, {"From": "07012341234"}, "07012341234"),
+        (
+            {"from_": "07012341234"},
+            {"caller_id_mode": "shared-010"},
+            {"From": "07012341234", "CallerIdMode": "shared-010"},
+            "07012341234",
+        ),
+        (
+            {"sdk_agent_id": "front-desk"},
+            {},
+            {"SdkAgentId": "front-desk", "CallerIdMode": "shared-010"},
+            "01099998888",
+        ),
+    ],
+)
+async def test_call_sends_the_selected_connection_target(target, call_options, expected_fields, expected_from):
+    agent = ClawOpsAgent(
+        api_key="sk_test", account_id="AC_test", session=MagicMock(), prewarm_enabled=False, **target
+    )
+    agent.connect = AsyncMock()
+    response = {"callId": "CO1", "from": expected_from}
+    if "CallerIdMode" in expected_fields:
+        response["presentedFrom"] = "01099998888"
+    http_session, session_ctx = _mock_originate_ok(response)
+
+    with patch("aiohttp.ClientSession", return_value=session_ctx):
+        call = await agent.call("01012345678", **call_options)
+
+    assert _posted_body(http_session) == {"To": "01012345678", "Timeout": 60, **expected_fields}
+    assert call.from_number == expected_from
+    assert call.presented_from == response.get("presentedFrom")
+
+
+def _numberless_agent():
+    return ClawOpsAgent(
+        api_key="sk_test", account_id="AC_test", sdk_agent_id="front-desk",
+        session=MagicMock(), prewarm_enabled=False,
+    )
+
+
+def _numberless_ready_event():
+    return {
+        "callId": "CO1",
+        "mediaUrl": "wss://media.example.test/CO1",
+        "from": "01099998888",
+        "to": "01012345678",
+    }
+
+
+async def test_numberless_agent_accepts_an_outbound_call_originated_via_rest():
+    agent = _numberless_agent()
+    media = AsyncMock()
+    agent._start_call_session = media
+
+    event = _numberless_ready_event()
+    await agent._handle_outbound_ready(event)
+    await agent._handle_outbound_ready(event)
+    await asyncio.sleep(0)
+
+    call = agent._active_sessions["CO1"]
+    assert call.from_number == "01099998888"
+    assert call.to_number == "01012345678"
+    assert call.status == "in-progress"
+    media.assert_awaited_once_with(call, event["mediaUrl"])
+
+
+async def test_numberless_call_reuses_session_if_ready_and_end_arrive_before_http_response():
+    agent = _numberless_agent()
+    agent.connect = AsyncMock()
+    agent._start_call_session = AsyncMock()
+
+    async def early_events():
+        await agent._handle_outbound_ready(_numberless_ready_event())
+        await agent._handle_ended({"callId": "CO1", "status": "completed", "duration": 2})
+        return {"callId": "CO1", "from": "01099998888"}
+
+    _, session_ctx = _mock_originate_ok(json_side_effect=early_events)
+    with patch("aiohttp.ClientSession", return_value=session_ctx):
+        call = await agent.call("01012345678")
+    await asyncio.sleep(0)
+
+    assert call.ended_status == "completed"
+    assert call.ended_duration == 2
+    assert "CO1" not in agent._active_sessions
+    assert "CO1" not in agent._call_sessions
+
+
+async def test_numberless_call_replays_early_failure_without_opening_a_session():
+    agent = _numberless_agent()
+    agent.connect = AsyncMock()
+    opened = AsyncMock()
+    agent._open_session = opened
+
+    async def early_failure():
+        await agent._handle_failed({"callId": "CO1", "reason": "busy"})
+        return {"callId": "CO1", "from": "01099998888"}
+
+    _, session_ctx = _mock_originate_ok(json_side_effect=early_failure)
+    with patch("aiohttp.ClientSession", return_value=session_ctx):
+        call = await agent.call("01012345678")
+
+    assert call.ended_status == "busy"
+    assert "CO1" not in agent._active_sessions
+    opened.assert_not_awaited()
 
 
 @pytest.mark.asyncio

@@ -34,7 +34,9 @@ class Calls(SyncAPIResource):
         self,
         *,
         to: str,
-        from_: str,
+        from_: str | None = None,
+        caller_id_mode: Literal["shared-010"] | None = None,
+        sdk_agent_id: str | None = None,
         url: str | None = None,
         agent_id: str | None = None,
         call_context: CallContextParam | None = None,
@@ -51,19 +53,21 @@ class Calls(SyncAPIResource):
         """발신 전화를 생성합니다.
 
         PSTN 번호로 아웃바운드 전화를 발신합니다.
-        From 번호는 계정에 등록된 번호여야 합니다.
+        일반 발신의 From은 계정에 등록된 번호여야 합니다.
 
-        **4가지 모드** — ``url``, ``agent_id``, ``call_flow_id``는 서로 배타적입니다:
+        통화 처리 대상인 ``url``, ``agent_id``, ``call_flow_id``, ``sdk_agent_id``는 서로 배타적입니다.
 
         - **VoiceML 모드**: ``url``을 지정하면 VoiceML로 통화를 제어합니다.
         - **매니지드 에이전트 모드**: ``agent_id``를 지정하면 콘솔에서 만든 AI 에이전트가
           통화를 처리합니다.
         - **콜 플로우 모드**: ``call_flow_id``를 지정하면 결정적 ARS 플로우가 진행합니다.
-        - **Agent SDK 모드**: 셋 다 생략하면 From 번호에 연결된 Agent SDK로 연결됩니다.
+        - **Agent SDK 모드**: ``sdk_agent_id`` 또는 기존 ``from_`` 번호에 연결된 SDK가 통화를 처리합니다.
 
         Args:
             to: 수신 전화번호.
-            from_: 발신 번호. 계정에 등록된 번호여야 합니다.
+            from_: 계정에 등록된 발신번호. 공용 010 발신에서 통화 처리 대상을 명시하면 생략할 수 있습니다.
+            caller_id_mode: ``"shared-010"``이면 서버가 공용 010 회선을 선택합니다.
+            sdk_agent_id: 번호 없이 연결된 자체 호스팅 SDK의 식별자. 공용 010 발신에서 사용합니다.
             url: VoiceML 명령을 반환할 URL. ``agent_id``·``call_flow_id``와 배타.
             agent_id: 콘솔에서 만든 매니지드 에이전트 ID. ``url``·``call_flow_id``와 배타.
             call_context: ``agent_id`` 에이전트의 **이번 통화에만** 적용되는 컨텍스트.
@@ -100,6 +104,8 @@ class Calls(SyncAPIResource):
             {
                 "To": to,
                 "From": from_,
+                "CallerIdMode": caller_id_mode,
+                "SdkAgentId": sdk_agent_id,
                 "Url": url,
                 "AgentId": agent_id,
                 "CallContext": _call_context_body(call_context),
@@ -343,7 +349,9 @@ class AsyncCalls(AsyncAPIResource):
         self,
         *,
         to: str,
-        from_: str,
+        from_: str | None = None,
+        caller_id_mode: Literal["shared-010"] | None = None,
+        sdk_agent_id: str | None = None,
         url: str | None = None,
         agent_id: str | None = None,
         call_context: CallContextParam | None = None,
@@ -362,6 +370,8 @@ class AsyncCalls(AsyncAPIResource):
             {
                 "To": to,
                 "From": from_,
+                "CallerIdMode": caller_id_mode,
+                "SdkAgentId": sdk_agent_id,
                 "Url": url,
                 "AgentId": agent_id,
                 "CallContext": _call_context_body(call_context),

@@ -3,8 +3,8 @@ import httpx
 import pytest
 import respx
 
-from clawops._base_client import SyncAPIClient
-from clawops.resources.calls import Calls
+from clawops._base_client import AsyncAPIClient, SyncAPIClient
+from clawops.resources.calls import AsyncCalls, Calls
 from clawops.types.call import Call, CallControlResponse
 from clawops.types.transcript import TranscriptRequestAccepted, TranscriptStatus
 
@@ -101,6 +101,30 @@ class TestCallsCreate:
         calls.create(to="01012345678", from_="07052358010")
         parsed = json.loads(route.calls[0].request.content)
         assert set(parsed) == {"To", "From"}
+
+    @respx.mock
+    def test_create_shared_010_without_an_owned_number(self, calls):
+        route = respx.post(f"{BASE}{CALLS_PATH}").mock(return_value=httpx.Response(
+            201, json={**CALL_JSON, "from": "01099998888", "presentedFrom": "01099998888"},
+        ))
+        call = calls.create(to="01012345678", agent_id="cmagent123", caller_id_mode="shared-010")
+
+        assert json.loads(route.calls[0].request.content) == {
+            "To": "01012345678", "AgentId": "cmagent123", "CallerIdMode": "shared-010",
+        }
+        assert call.presented_from == "01099998888"
+
+
+@respx.mock
+async def test_async_create_shared_010_with_sdk_agent_id():
+    route = respx.post(f"{BASE}{CALLS_PATH}").mock(return_value=httpx.Response(201, json=CALL_JSON))
+    async with AsyncAPIClient(api_key="sk_test", base_url=BASE, max_retries=0) as client:
+        calls = AsyncCalls(client=client, account_id=ACCOUNT)
+        await calls.create(to="01012345678", sdk_agent_id="front-desk", caller_id_mode="shared-010")
+
+    assert json.loads(route.calls[0].request.content) == {
+        "To": "01012345678", "SdkAgentId": "front-desk", "CallerIdMode": "shared-010",
+    }
 
 
 class TestCallsList:

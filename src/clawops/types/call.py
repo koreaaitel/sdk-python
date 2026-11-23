@@ -74,7 +74,8 @@ class Call(BaseModel):
             busy(통화중) / rejected(수신 거절) / canceled(응답 전 발신 측 취소) /
             failed(시스템·망 오류). completed 만이 실제로 연결된 통화를 의미한다.
         to: 수신 전화번호 또는 SIP URI.
-        from_: 발신 전화번호 (계정에 등록된 번호).
+        from_: 발신 전화번호. 발신 시 계정 번호를 쓰고, 계정 번호를 생략한 공용 010 발신에는 선택된 번호를 씁니다.
+        presented_from: 공용 010 발신에 사용한 번호. 일반 통화에는 None.
         direction: 통화 방향. outbound 또는 inbound.
         duration: 통화 시간 (초). 통화 중이거나 미연결인 경우 None.
         account_id: 계정 ID.
@@ -135,6 +136,7 @@ class Call(BaseModel):
     ]
     to: str
     from_: str
+    presented_from: Optional[str] = None
     direction: Literal["outbound", "inbound"]
     duration: Optional[int] = None
     recording_url: Optional[str] = None

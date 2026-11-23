@@ -359,6 +359,26 @@ asyncio.run(main())
 | `to`                | `str` | 필수   | 수신 전화번호                                                                                          |
 | `timeout`           | `int` | `60`   | 상대방이 받지 않을 때 발신을 취소하기까지의 대기 시간 (초)                                             |
 | `machine_detection` | `str` | 없음   | 음성사서함 감지(AMD). `"Enable"`=결과만 통보(통화 계속), `"Hangup"`=사서함 감지 시 자동 종료. 결과는 통화 조회의 `answered_by` 와 status callback 의 `AnsweredBy` 로 확인 |
+| `caller_id_mode`    | `str` | 없음   | 기존 번호로 연결한 SDK에서 `"shared-010"`을 지정하면 공용 010으로 발신합니다. SDK ID 연결은 이 모드를 기본으로 씁니다. |
+
+### 보유 번호 없이 공용 010 발신
+
+공용 010 발신 권한이 있는 계정에서 `from_`을 생략하고, 에이전트를 식별할 `sdk_agent_id`를 지정하세요. 같은 에이전트는 재시작해도 같은 ID를 사용합니다. ID는 영문자 또는 숫자로 시작하며 영문자, 숫자, 밑줄, 하이픈을 1~64자까지 쓸 수 있습니다.
+
+```python
+agent = ClawOpsAgent(
+    sdk_agent_id="reservations",
+    session=OpenAIRealtime(system_prompt="예약 확인 도우미입니다."),
+)
+try:
+    call = await agent.call("01012345678")
+    print(call.from_number)  # 이번 통화에 배정된 공용 010
+    await call.wait()
+finally:
+    await agent.disconnect()
+```
+
+SDK ID 연결은 발신 전용입니다. 계정의 기존 번호로 수신하는 에이전트는 `from_`을 사용하고, 공용 010이 필요한 통화에만 `await agent.call(to, caller_id_mode="shared-010")`을 호출하세요. 그때 `call.from_number`에는 기존 계정 번호, `call.presented_from`에는 이번 통화에 배정된 공용 010이 들어갑니다.
 
 ### 발신 결과 확인하기
 

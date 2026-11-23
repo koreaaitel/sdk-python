@@ -9,6 +9,7 @@ import asyncio
 import logging
 import math
 import os
+import re
 import signal
 import time
 import inspect
@@ -94,6 +95,8 @@ DEFAULT_HANDOVER_WAIT_S = 20.0
 # 더하면 플랫폼 유예를 넘겨 SIGKILL 로 잘리기 때문이다.
 DEFAULT_SHUTDOWN_DEADLINE_S = math.inf
 
+_SDK_AGENT_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
+
 
 async def _first_of(*events: asyncio.Event, timeout: float) -> None:
     """이벤트 중 **아무거나 하나**가 서거나 시간이 다 될 때까지 기다린다."""
@@ -144,7 +147,8 @@ class ClawOpsAgent:
         api_key: str | None = None,
         account_id: str | None = None,
         base_url: str | None = None,
-        from_: str,
+        from_: str | None = None,
+        sdk_agent_id: str | None = None,
         session: Session | None = None,
         session_factory: Callable[[], Session] | None = None,
         mcp_servers: list[Any] | None = None,
@@ -175,6 +179,13 @@ class ClawOpsAgent:
         if base_url is None:
             base_url = os.environ.get("CLAWOPS_BASE_URL", DEFAULT_BASE_URL)
 
+        if (from_ is None) == (sdk_agent_id is None):
+            raise AgentError("from_ 또는 sdk_agent_id 중 하나만 지정하세요.")
+        if sdk_agent_id is not None and (
+            not isinstance(sdk_agent_id, str) or not _SDK_AGENT_ID_PATTERN.fullmatch(sdk_agent_id)
+        ):
+            raise AgentError("sdk_agent_id는 영문자 또는 숫자로 시작하는 1~64자의 영문자, 숫자, _, -이어야 합니다.")
+
         if (session is None) == (session_factory is None):
             raise AgentError(
                 "session 또는 session_factory 중 하나만 지정하세요. "
@@ -185,7 +196,8 @@ class ClawOpsAgent:
         self._api_key = api_key
         self._account_id = account_id
         self._base_url = base_url
-        self._from_number = from_
+        self._from_number = from_ or ""
+        self._sdk_agent_id = sdk_agent_id
 
         self._session = session
         self._session_factory = session_factory
@@ -236,6 +248,11 @@ class ClawOpsAgent:
         # IncomingCall.transfer() 로 받은 통화의 task — 참조를 쥐고 있어야 GC 되지 않는다.
         self._transfer_only_tasks: set[asyncio.Task[None]] = set()
         self._active_sessions: dict[str, CallSession] = {}
+        # SDK ID로 지정된 통화는 REST 201보다 control 알림이 먼저 도착할 수 있다.
+        self._pending_sdk_call_responses = 0
+        self._sdk_calls_before_response: dict[str, CallSession] = {}
+        self._sdk_terminals_before_response: dict[str, tuple[str, dict[str, Any]]] = {}
+        self._opening_outbound_sessions: dict[str, asyncio.Event] = {}
         # 미디어 정리를 마친 통화가 서버 종료 프레임을 기다리는 자리. call_id → Event.
         self._terminal_waiters: dict[str, asyncio.Event] = {}
         self._control_ws: ControlWebSocket | None = None
@@ -332,6 +349,8 @@ class ClawOpsAgent:
         if self._auth_rejected is not None:
             raise self._auth_rejected
         if self._control_ws is not None:
+            if self._sdk_agent_id is not None:
+                await self._control_ws.wait_connected()
             return
         # 배포 환경 진단 — 동작은 안 바꾸고 조용한 실패만 시끄럽게 한다.
         # 낡은 마커 정리는 __init__ 에서 이미 했다(멱등하지만 여기서도 한 번 더 — connect()
@@ -352,7 +371,7 @@ class ClawOpsAgent:
         # drain 중/이후의 발신 한 건이 방금 내놓은 자리를 도로 뺏는 일이 생긴다.
         if self._taken_over:
             raise AgentError(
-                f"{self._from_number} 는 이제 다른 프로세스가 맡는다 — 재연결하면 그 프로세스를 "
+                f"{self._sdk_agent_id or self._from_number} 는 이제 다른 프로세스가 맡는다 — 재연결하면 그 프로세스를 "
                 "밀어낸다. 이 프로세스를 되살리지 말고 새 에이전트를 띄울 것."
             )
         # 세션 프로세스 수명 셋업 (있으면). control WS task + 모든 통화 task 의 공통
@@ -363,7 +382,7 @@ class ClawOpsAgent:
         if self._session is not None and hasattr(self._session, "session_setup"):
             await self._session.session_setup()
         await self._ensure_control_ws()
-        log.info(f"ClawOpsAgent connected on {self._from_number}")
+        log.info("ClawOpsAgent connected on %s", self._sdk_agent_id or self._from_number)
 
     async def serve(
         self,
@@ -555,7 +574,7 @@ class ClawOpsAgent:
         self._taken_over = True
         self._ready = False
         remove_ready_marker()
-        log.info(f"{self._from_number} 는 이제 다른 프로세스가 맡는다 (close {code}) — 인계")
+        log.info("%s 는 이제 다른 프로세스가 맡는다 (close %s) — 인계", self._sdk_agent_id or self._from_number, code)
         if self._on_taken_over:
             try:
                 self._on_taken_over(code, reason)
@@ -594,7 +613,7 @@ class ClawOpsAgent:
         # 이 인스턴스를 뒤로 뺀다.
         self._ready = False
         remove_ready_marker()
-        log.info(f"{self._from_number} 는 이제 다른 프로세스가 맡는다 ({reason}) — 인계")
+        log.info("%s 는 이제 다른 프로세스가 맡는다 (%s) — 인계", self._sdk_agent_id or self._from_number, reason)
         if self._stop_serve is not None and not self._stop_serve.is_set():
             log.warning(
                 "종료 시그널 없이 인계가 왔다 — 같은 번호로 인스턴스가 둘 이상 떠 있지 않은지 "
@@ -786,13 +805,16 @@ class ClawOpsAgent:
     async def _ensure_control_ws(self) -> None:
         """Control WS가 없으면 연결한다."""
         if self._control_ws is not None:
+            if self._sdk_agent_id is not None:
+                await self._control_ws.wait_connected()
             return
         self._control_given_up = False
         self._control_ws = ControlWebSocket(
             base_url=self._base_url,
             api_key=self._api_key,
             account_id=self._account_id,
-            number=self._from_number,
+            number=self._from_number if self._sdk_agent_id is None else None,
+            sdk_agent_id=self._sdk_agent_id,
             on_call_incoming=self._handle_incoming,
             on_call_ended=self._handle_ended,
             on_call_outbound_ready=self._handle_outbound_ready,
@@ -810,6 +832,14 @@ class ClawOpsAgent:
             self._control_ws = None
             self._control_ws_task = None
             raise
+        except asyncio.TimeoutError as exc:
+            if self._sdk_agent_id is None:
+                raise
+            self._control_ws_task.cancel()
+            await asyncio.gather(self._control_ws_task, return_exceptions=True)
+            self._control_ws = None
+            self._control_ws_task = None
+            raise AgentConnectionError("SDK 에이전트 등록이 제한 시간 안에 완료되지 않았습니다.") from exc
         try:
             await self._control_ws.send({"event": "agent.hello", "sdk": get_sdk_info()})
         except Exception:
@@ -825,6 +855,7 @@ class ClawOpsAgent:
         *,
         timeout: int = 60,
         machine_detection: Literal["Enable", "Hangup"] | None = None,
+        caller_id_mode: Literal["shared-010"] | None = None,
     ) -> CallSession:
         """발신 전화를 건다. CallSession을 즉시 리턴 (queued 상태).
 
@@ -837,13 +868,24 @@ class ClawOpsAgent:
                 ``AnsweredBy`` 통보(통화 계속), ``"Hangup"`` 이면 음성사서함 감지 시 자동 종료.
                 ``None`` (기본)이면 인스턴스 default(생성자의 ``machine_detection``)를 따른다.
                 우선순위: 호출 인자 > 인스턴스 default > 비활성.
+            caller_id_mode: 공용 010으로 발신하려면 ``"shared-010"``을 지정한다.
+                ``sdk_agent_id``로 생성한 에이전트에서는 기본으로 적용된다.
         """
         await self.connect()
 
         import aiohttp as _aiohttp
 
         url = f"{self._base_url}/v1/accounts/{self._account_id}/calls"
-        body: dict[str, object] = {"To": to, "From": self._from_number, "Timeout": timeout}
+        body: dict[str, object] = {"To": to, "Timeout": timeout}
+        numberless = self._sdk_agent_id is not None
+        if numberless:
+            body["SdkAgentId"] = self._sdk_agent_id
+            if caller_id_mode is None:
+                caller_id_mode = "shared-010"
+        else:
+            body["From"] = self._from_number
+        if caller_id_mode is not None:
+            body["CallerIdMode"] = caller_id_mode
         effective_md = machine_detection if machine_detection is not None else self._machine_detection
         if effective_md in ("Enable", "Hangup"):
             body["MachineDetection"] = effective_md
@@ -851,24 +893,59 @@ class ClawOpsAgent:
             "Authorization": f"Bearer {self._api_key}",
             "Content-Type": "application/json",
         }
-        async with _aiohttp.ClientSession() as session:
-            async with session.post(url, json=body, headers=headers) as resp:
-                if resp.status != 201:
-                    error = await resp.json()
-                    err_msg = error.get("error", "")
-                    err_code = error.get("code", "")
-                    agent_err = AgentError(f"발신 실패 ({resp.status}): {err_msg}")
-                    agent_err.status = resp.status
-                    agent_err.code = err_code
-                    raise agent_err
-                data = await resp.json()
+        terminal = None
+        if numberless:
+            self._pending_sdk_call_responses += 1
+        try:
+            async with _aiohttp.ClientSession() as session:
+                async with session.post(url, json=body, headers=headers) as resp:
+                    if resp.status != 201:
+                        error = await resp.json()
+                        err_msg = error.get("error", "")
+                        err_code = error.get("code", "")
+                        agent_err = AgentError(f"발신 실패 ({resp.status}): {err_msg}")
+                        agent_err.status = resp.status
+                        agent_err.code = err_code
+                        raise agent_err
+                    data = await resp.json()
 
+            if numberless:
+                call_id = data["callId"]
+                ready_call = self._active_sessions.get(call_id) or self._sdk_calls_before_response.get(call_id)
+                if ready_call is not None:
+                    return ready_call
+                terminal = self._sdk_terminals_before_response.pop(call_id, None)
+        finally:
+            if numberless:
+                self._pending_sdk_call_responses -= 1
+                if not self._pending_sdk_call_responses:
+                    self._sdk_calls_before_response.clear()
+                    self._sdk_terminals_before_response.clear()
+
+        presented_from = data.get("presentedFrom") or None
+        from_number = (presented_from or data.get("from") or "") if numberless else self._from_number
+        call_session = self._register_outbound_call(
+            data["callId"], from_number, to, presented_from=presented_from
+        )
+        if terminal is None:
+            await self._prepare_outbound_call(call_session)
+        elif terminal[0] == "failed":
+            await self._handle_failed(terminal[1])
+        else:
+            await self._handle_ended(terminal[1])
+        log.info("Outbound call initiated: %s -> %s (%s)", from_number, to, call_session.call_id)
+        return call_session
+
+    def _register_outbound_call(
+        self, call_id: str, from_number: str, to: str, *, presented_from: str | None = None
+    ) -> CallSession:
         call_session = CallSession(
-            call_id=data["callId"],
-            from_number=self._from_number,
+            call_id=call_id,
+            from_number=from_number,
             to_number=to,
             account_id=self._account_id,
             direction="outbound",
+            presented_from=presented_from,
         )
 
         for event, handlers in self._event_handlers.items():
@@ -876,20 +953,23 @@ class ClawOpsAgent:
                 call_session.on(event, handler)
 
         self._active_sessions[call_session.call_id] = call_session
-        # prewarm 보다 먼저 이 통화의 Session 을 확정한다 — _start_prewarm 이
-        # tools_frozen_after_prewarm 을 그 인스턴스에서 읽는다.
-        await self._open_session(call_session.call_id)
-        log.info(f"Outbound call initiated: {self._from_number} -> {to} ({call_session.call_id})")
-
-        # originate 직후 prewarm 을 시작한다 — ring 구간(answer 이전)에 LLM 연결 +
-        # greeting 생성을 흡수해 answer→first-audio latency 를 줄인다. call.ringing
-        # 이벤트는 트렁크가 SIP 18x 를 안 올리면 도착하지 않을 수 있어 신뢰하지 않는다.
-        # ringing/outbound_ready 핸들러의 prewarm 시작은 이 시점을 놓쳤을 때의 fallback.
-        self._start_prewarm(call_session.call_id)
-
         return call_session
 
+    async def _prepare_outbound_call(self, call: CallSession) -> None:
+        ready = asyncio.Event()
+        self._opening_outbound_sessions[call.call_id] = ready
+        try:
+            await self._open_session(call.call_id)
+            # 발신 직후 prewarm을 시작해 상대가 받기 전 LLM 연결과 첫 멘트 생성을 진행한다.
+            if self._active_sessions.get(call.call_id) is call:
+                self._start_prewarm(call.call_id)
+        finally:
+            self._opening_outbound_sessions.pop(call.call_id, None)
+            ready.set()
+
     async def _handle_incoming(self, data: dict[str, Any]) -> None:
+        if self._sdk_agent_id is not None:
+            return
         if self._incoming_hook is None:
             await self._accept_incoming(data)
             return
@@ -1138,7 +1218,9 @@ class ClawOpsAgent:
 
         asyncio.create_task(self._safe_start_call_session(call, media_url))
 
-    async def _safe_start_call_session(self, call: CallSession, media_url: str) -> None:
+    async def _safe_start_call_session(
+        self, call: CallSession, media_url: str, *, prepare_outbound: bool = False
+    ) -> None:
         """_start_call_session 의 예외를 잡아 control WS 로 call.session_failed 전송한다.
 
         OpenAI/Gemini API 키 누락 등 session.start() 단계 실패는 media WS connect
@@ -1146,6 +1228,12 @@ class ClawOpsAgent:
         즉시 알려서 fail-fast 시키고 _active_sessions 에서 정리한다.
         """
         try:
+            if prepare_outbound:
+                if self._active_sessions.get(call.call_id) is not call:
+                    return
+                await self._prepare_outbound_call(call)
+                if self._active_sessions.get(call.call_id) is not call:
+                    return
             await self._start_call_session(call, media_url)
         except Exception as e:
             log.error(
@@ -1398,6 +1486,19 @@ class ClawOpsAgent:
         call_id = data["callId"]
         media_url = data.get("mediaUrl", "")
         call = self._active_sessions.get(call_id)
+        prepare_outbound = False
+        if call is None and self._sdk_agent_id is not None:
+            if call_id in self._sdk_terminals_before_response or call_id in self._sdk_calls_before_response:
+                return
+            # 자체 호스팅 SDK ID를 명시한 REST 호출도 서버가 이 제어 연결로 보낸다.
+            presented_from = data.get("presentedFrom") or None
+            from_number = presented_from or data.get("from")
+            to = data.get("to")
+            if all(isinstance(value, str) and value for value in (call_id, media_url, from_number, to)):
+                call = self._register_outbound_call(call_id, from_number, to, presented_from=presented_from)
+                if self._pending_sdk_call_responses:
+                    self._sdk_calls_before_response[call_id] = call
+                prepare_outbound = True
         if not call:
             log.warning(f"Unknown outbound call: {call_id}")
             if self._control_ws:
@@ -1417,6 +1518,9 @@ class ClawOpsAgent:
                 except Exception:
                     pass
             return
+
+        if self._sdk_agent_id is not None and call.status == "in-progress":
+            return
         call.status = "in-progress"
         log.info(f"Outbound call answered: {call.from_number} -> {call.to_number} ({call_id})")
 
@@ -1424,8 +1528,16 @@ class ClawOpsAgent:
         # ringing 이벤트가 오지 않은 경우의 fallback 으로만 시작한다.
         # _start_call_session 이 prewarm task 를 await 후 attach() 로 부착한다.
         # prewarm_enabled=False 면 기존 start() 경로로 동작.
-        self._start_prewarm(call_id)
+        if prepare_outbound:
+            asyncio.create_task(self._safe_start_call_session(call, media_url, prepare_outbound=True))
+            return
 
+        ready = self._opening_outbound_sessions.get(call_id)
+        if ready is not None:
+            await ready.wait()
+            if self._active_sessions.get(call_id) is not call:
+                return
+        self._start_prewarm(call_id)
         asyncio.create_task(self._safe_start_call_session(call, media_url))
 
     async def _prewarm_session(self, call_id: str) -> None:
@@ -1498,6 +1610,8 @@ class ClawOpsAgent:
         call_id = data.get("callId", "")
         reason = data.get("reason", "failed")
         call = self._active_sessions.get(call_id)
+        if call is None and self._pending_sdk_call_responses and call_id:
+            self._sdk_terminals_before_response[call_id] = ("failed", data)
         if call:
             call.status = reason
             call.ended_status = reason
@@ -1520,6 +1634,8 @@ class ClawOpsAgent:
         if call_id in self._screening:
             self._screening[call_id] = True
         call = self._active_sessions.get(call_id)
+        if call is None and self._pending_sdk_call_responses and call_id:
+            self._sdk_terminals_before_response[call_id] = ("ended", data)
         log.info(f"Call ended (server): {call_id} (status={status})")
         if call:
             call.status = status
