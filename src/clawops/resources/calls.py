@@ -54,6 +54,7 @@ class Calls(SyncAPIResource):
 
         PSTN 번호로 아웃바운드 전화를 발신합니다.
         일반 발신의 From은 계정에 등록된 번호여야 합니다.
+        공용 010 발신은 요청이 접수된 뒤 응답이 유실될 수 있어 자동 재시도를 끕니다.
 
         통화 처리 대상인 ``url``, ``agent_id``, ``call_flow_id``, ``sdk_agent_id``는 서로 배타적입니다.
 
@@ -124,6 +125,7 @@ class Calls(SyncAPIResource):
             extra_headers=extra_headers,
             extra_query=extra_query,
             timeout=timeout_,
+            max_retries=0 if caller_id_mode == "shared-010" else None,
         )
 
     def list(
@@ -390,6 +392,7 @@ class AsyncCalls(AsyncAPIResource):
             extra_headers=extra_headers,
             extra_query=extra_query,
             timeout=timeout_,
+            max_retries=0 if caller_id_mode == "shared-010" else None,
         )
 
     async def list(

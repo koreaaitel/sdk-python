@@ -124,6 +124,7 @@ class SyncAPIClient:
         extra_headers: dict[str, str] | None = None,
         extra_query: dict[str, object] | None = None,
         timeout: float | httpx.Timeout | None = None,
+        max_retries: int | None = None,
     ) -> httpx.Response:
         headers = self._build_headers(extra_headers)
         body_kwargs = _body_kwargs(body, files, headers)
@@ -136,7 +137,8 @@ class SyncAPIClient:
         if isinstance(req_timeout, (int, float)):
             req_timeout = httpx.Timeout(req_timeout)
 
-        retries_left = self._max_retries
+        retry_budget = self._max_retries if max_retries is None else max_retries
+        retries_left = retry_budget
 
         while True:
             try:
@@ -151,13 +153,13 @@ class SyncAPIClient:
             except httpx.TimeoutException as e:
                 if retries_left > 0:
                     retries_left -= 1
-                    time.sleep(self._retry_delay(self._max_retries - retries_left))
+                    time.sleep(self._retry_delay(retry_budget - retries_left))
                     continue
                 raise APITimeoutError(request=httpx.Request(method, self._base_url + path)) from e
             except httpx.ConnectError as e:
                 if retries_left > 0:
                     retries_left -= 1
-                    time.sleep(self._retry_delay(self._max_retries - retries_left))
+                    time.sleep(self._retry_delay(retry_budget - retries_left))
                     continue
                 raise APIConnectionError(request=httpx.Request(method, self._base_url + path)) from e
 
@@ -166,7 +168,7 @@ class SyncAPIClient:
 
             if retries_left > 0 and self._should_retry(response):
                 retries_left -= 1
-                time.sleep(self._retry_delay(self._max_retries - retries_left))
+                time.sleep(self._retry_delay(retry_budget - retries_left))
                 continue
 
             raise _make_status_error(response=response)
@@ -183,10 +185,11 @@ class SyncAPIClient:
         extra_headers: dict[str, str] | None = None,
         extra_query: dict[str, object] | None = None,
         timeout: float | httpx.Timeout | None = None,
+        max_retries: int | None = None,
     ) -> _T | None:
         response = self._send(
             method, path, body=body, query=query, files=files,
-            extra_headers=extra_headers, extra_query=extra_query, timeout=timeout,
+            extra_headers=extra_headers, extra_query=extra_query, timeout=timeout, max_retries=max_retries,
         )
         if response.status_code == 204 or cast_to is None:
             return None
@@ -217,9 +220,10 @@ class SyncAPIClient:
     def _post(self, path: str, *, body: dict[str, Any] | None = None,
               files: dict[str, Any] | None = None, cast_to: type[_T],
               extra_headers: dict[str, str] | None = None, extra_query: dict[str, object] | None = None,
-              timeout: float | httpx.Timeout | None = None) -> _T:
+              timeout: float | httpx.Timeout | None = None, max_retries: int | None = None) -> _T:
         result = self._request("POST", path, body=body, files=files, cast_to=cast_to,
-                               extra_headers=extra_headers, extra_query=extra_query, timeout=timeout)
+                               extra_headers=extra_headers, extra_query=extra_query, timeout=timeout,
+                               max_retries=max_retries)
         assert result is not None
         return result
 
@@ -368,6 +372,7 @@ class AsyncAPIClient:
         extra_headers: dict[str, str] | None = None,
         extra_query: dict[str, object] | None = None,
         timeout: float | httpx.Timeout | None = None,
+        max_retries: int | None = None,
     ) -> httpx.Response:
         import asyncio
 
@@ -381,7 +386,8 @@ class AsyncAPIClient:
         if isinstance(req_timeout, (int, float)):
             req_timeout = httpx.Timeout(req_timeout)
 
-        retries_left = self._max_retries
+        retry_budget = self._max_retries if max_retries is None else max_retries
+        retries_left = retry_budget
 
         while True:
             try:
@@ -393,13 +399,13 @@ class AsyncAPIClient:
             except httpx.TimeoutException as e:
                 if retries_left > 0:
                     retries_left -= 1
-                    await asyncio.sleep(self._retry_delay(self._max_retries - retries_left))
+                    await asyncio.sleep(self._retry_delay(retry_budget - retries_left))
                     continue
                 raise APITimeoutError(request=httpx.Request(method, self._base_url + path)) from e
             except httpx.ConnectError as e:
                 if retries_left > 0:
                     retries_left -= 1
-                    await asyncio.sleep(self._retry_delay(self._max_retries - retries_left))
+                    await asyncio.sleep(self._retry_delay(retry_budget - retries_left))
                     continue
                 raise APIConnectionError(request=httpx.Request(method, self._base_url + path)) from e
 
@@ -408,7 +414,7 @@ class AsyncAPIClient:
 
             if retries_left > 0 and self._should_retry(response):
                 retries_left -= 1
-                await asyncio.sleep(self._retry_delay(self._max_retries - retries_left))
+                await asyncio.sleep(self._retry_delay(retry_budget - retries_left))
                 continue
 
             raise _make_status_error(response=response)
@@ -425,10 +431,11 @@ class AsyncAPIClient:
         extra_headers: dict[str, str] | None = None,
         extra_query: dict[str, object] | None = None,
         timeout: float | httpx.Timeout | None = None,
+        max_retries: int | None = None,
     ) -> _T | None:
         response = await self._send(
             method, path, body=body, query=query, files=files,
-            extra_headers=extra_headers, extra_query=extra_query, timeout=timeout,
+            extra_headers=extra_headers, extra_query=extra_query, timeout=timeout, max_retries=max_retries,
         )
         if response.status_code == 204 or cast_to is None:
             return None
@@ -459,9 +466,10 @@ class AsyncAPIClient:
     async def _post(self, path: str, *, body: dict[str, Any] | None = None,
                     files: dict[str, Any] | None = None, cast_to: type[_T],
                     extra_headers: dict[str, str] | None = None, extra_query: dict[str, object] | None = None,
-                    timeout: float | httpx.Timeout | None = None) -> _T:
+                    timeout: float | httpx.Timeout | None = None, max_retries: int | None = None) -> _T:
         result = await self._request("POST", path, body=body, files=files, cast_to=cast_to,
-                                     extra_headers=extra_headers, extra_query=extra_query, timeout=timeout)
+                                     extra_headers=extra_headers, extra_query=extra_query, timeout=timeout,
+                                     max_retries=max_retries)
         assert result is not None
         return result
 

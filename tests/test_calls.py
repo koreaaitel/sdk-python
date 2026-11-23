@@ -4,6 +4,7 @@ import pytest
 import respx
 
 from clawops._base_client import AsyncAPIClient, SyncAPIClient
+from clawops._exceptions import APITimeoutError, ServiceUnavailableError
 from clawops.resources.calls import AsyncCalls, Calls
 from clawops.types.call import Call, CallControlResponse
 from clawops.types.transcript import TranscriptRequestAccepted, TranscriptStatus
@@ -125,6 +126,41 @@ async def test_async_create_shared_010_with_sdk_agent_id():
     assert json.loads(route.calls[0].request.content) == {
         "To": "01012345678", "SdkAgentId": "front-desk", "CallerIdMode": "shared-010",
     }
+
+
+@pytest.mark.parametrize("shared", [False, True])
+@pytest.mark.parametrize("timeout", [False, True])
+@respx.mock
+def test_sync_create_retries_only_ordinary_calls(shared, timeout, monkeypatch):
+    failure = httpx.ReadTimeout("response lost") if timeout else httpx.Response(503)
+    route = respx.post(f"{BASE}{CALLS_PATH}").mock(side_effect=[failure, httpx.Response(201, json=CALL_JSON)])
+    with SyncAPIClient(api_key="sk_test", base_url=BASE, max_retries=1) as client:
+        monkeypatch.setattr(client, "_retry_delay", lambda _: 0)
+        calls = Calls(client=client, account_id=ACCOUNT)
+        if shared:
+            with pytest.raises(APITimeoutError if timeout else ServiceUnavailableError):
+                calls.create(to="01012345678", agent_id="reservation-agent", caller_id_mode="shared-010")
+        else:
+            assert calls.create(to="01012345678", from_="07052358010").call_id == CALL_JSON["callId"]
+    assert route.call_count == (1 if shared else 2)
+
+
+@pytest.mark.parametrize("shared", [False, True])
+@pytest.mark.parametrize("timeout", [False, True])
+@respx.mock
+async def test_async_create_retries_only_ordinary_calls(shared, timeout, monkeypatch):
+    failure = httpx.ReadTimeout("response lost") if timeout else httpx.Response(503)
+    route = respx.post(f"{BASE}{CALLS_PATH}").mock(side_effect=[failure, httpx.Response(201, json=CALL_JSON)])
+    async with AsyncAPIClient(api_key="sk_test", base_url=BASE, max_retries=1) as client:
+        monkeypatch.setattr(client, "_retry_delay", lambda _: 0)
+        calls = AsyncCalls(client=client, account_id=ACCOUNT)
+        if shared:
+            with pytest.raises(APITimeoutError if timeout else ServiceUnavailableError):
+                await calls.create(to="01012345678", sdk_agent_id="front-desk", caller_id_mode="shared-010")
+        else:
+            call = await calls.create(to="01012345678", from_="07052358010")
+            assert call.call_id == CALL_JSON["callId"]
+    assert route.call_count == (1 if shared else 2)
 
 
 class TestCallsList:
