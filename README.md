@@ -351,6 +351,17 @@ client.numbers.delete("07012340001")
 되돌리면 `agent_id` 가 `None` 이 되므로, 다시 `agent` 로 돌아갈 때 `agent_id` 를 새로 지정해야
 합니다.
 
+### 070 발급부터 반납까지 재현
+
+한국에이아이통신의 [070 수명주기 예제](examples/number_lifecycle_replay.py)를 실행하면 Python SDK에서 번호 발급, VoiceML 착신 설정, 같은 통화의 서명된 수신·종료 폼 검증, 발신 접수·상태 조회, 번호 반납을 한 번에 확인할 수 있습니다.
+
+```bash
+python -m pip install koreaaitel
+python examples/number_lifecycle_replay.py
+```
+
+예제는 합성 번호와 메모리 HTTP 응답으로 실행합니다. `queued`는 발신 접수 상태입니다. 실제 번호 발급 조건, 전화 연결 확인, 반납 전에 점검할 항목은 [070 음성 API 가이드](https://koreaaitel.com/blog/korea-voice-api)와 [개발자 문서](https://docs.koreaaitel.com/numbers)를 참고하세요. [English integration guide](https://koreaaitel.com/en/blog/korea-voice-api)
+
 ### 문자 발신번호 (Sender Numbers)
 
 문자는 등록해 승인된 발신번호로만 보낼 수 있습니다. 승인되지 않은 번호를 `from_` 으로 보내면 `400 from_not_registered` 입니다.
