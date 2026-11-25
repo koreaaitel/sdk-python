@@ -128,6 +128,29 @@ async def test_async_create_shared_010_with_sdk_agent_id():
     }
 
 
+@respx.mock
+def test_create_sends_optional_idempotency_key_and_keeps_extra_headers(calls):
+    route = respx.post(f"{BASE}{CALLS_PATH}").mock(return_value=httpx.Response(201, json=CALL_JSON))
+    calls.create(
+        to="01012345678", sdk_agent_id="front-desk", caller_id_mode="shared-010",
+        idempotency_key="8e03978e-40d5-43e8-bc93-6894a57f9324", extra_headers={"X-Trace": "t1"},
+    )
+    calls.create(to="01012345678", from_="07052358010")
+    first, plain = route.calls[0].request, route.calls[1].request
+    assert first.headers["Idempotency-Key"] == '"8e03978e-40d5-43e8-bc93-6894a57f9324"'
+    assert first.headers["X-Trace"] == "t1"
+    assert "Idempotency-Key" not in plain.headers
+
+
+@respx.mock
+async def test_async_create_sends_optional_idempotency_key():
+    route = respx.post(f"{BASE}{CALLS_PATH}").mock(return_value=httpx.Response(201, json=CALL_JSON))
+    async with AsyncAPIClient(api_key="sk_test", base_url=BASE, max_retries=0) as client:
+        calls = AsyncCalls(client=client, account_id=ACCOUNT)
+        await calls.create(to="01012345678", agent_id="a1", caller_id_mode="shared-010", idempotency_key="k-1")
+    assert route.calls[0].request.headers["Idempotency-Key"] == '"k-1"'
+
+
 @pytest.mark.parametrize("shared", [False, True])
 @pytest.mark.parametrize("timeout", [False, True])
 @respx.mock

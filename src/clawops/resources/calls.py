@@ -22,6 +22,15 @@ from ..types.summary import SummaryStatus
 from ..types.transcript import TranscriptRequestAccepted, TranscriptStatus
 
 
+def _with_idempotency_key(
+    extra_headers: dict[str, str] | None, idempotency_key: str | None
+) -> dict[str, str] | None:
+    """``Idempotency-Key`` 를 Structured Field String(따옴표) 형태로 붙인다."""
+    if idempotency_key is None:
+        return extra_headers
+    return {**(extra_headers or {}), "Idempotency-Key": f'"{idempotency_key}"'}
+
+
 def _call_context_body(ctx: CallContextParam | None) -> dict[str, object] | None:
     """``call_context``\\를 REST 본문의 PascalCase 로 옮긴다.
 
@@ -78,6 +87,7 @@ class Calls(SyncAPIResource):
         extra_headers: dict[str, str] | None = None,
         extra_query: dict[str, object] | None = None,
         timeout_: float | None = None,
+        idempotency_key: str | None = None,
     ) -> Call:
         """발신 전화를 생성합니다.
 
@@ -118,6 +128,9 @@ class Calls(SyncAPIResource):
             extra_headers: 추가 HTTP 헤더.
             extra_query: 추가 쿼리 파라미터.
             timeout_: 이 요청의 타임아웃 (초).
+            idempotency_key: 선택. 같은 계정에서 같은 키로 다시 보낸 요청은 새 통화를 만들지 않고
+                처음 결과를 돌려받습니다(``Idempotency-Key`` 헤더). UUID 처럼 요청마다 고유한 값을 쓰고,
+                응답을 받지 못해 직접 다시 보낼 때 같은 값을 씁니다. 키는 24시간 유지됩니다.
 
         Returns:
             생성된 Call 객체.
@@ -151,7 +164,7 @@ class Calls(SyncAPIResource):
             f"{self._base_path}/calls",
             body=body,
             cast_to=Call,
-            extra_headers=extra_headers,
+            extra_headers=_with_idempotency_key(extra_headers, idempotency_key),
             extra_query=extra_query,
             timeout=timeout_,
             max_retries=0 if caller_id_mode == "shared-010" else None,
@@ -413,6 +426,7 @@ class AsyncCalls(AsyncAPIResource):
         extra_headers: dict[str, str] | None = None,
         extra_query: dict[str, object] | None = None,
         timeout_: float | None = None,
+        idempotency_key: str | None = None,
     ) -> Call:
         """발신 전화를 비동기로 생성합니다. 자세한 내용은 Calls.create를 참고하세요."""
         body = strip_not_given(
@@ -436,7 +450,7 @@ class AsyncCalls(AsyncAPIResource):
             f"{self._base_path}/calls",
             body=body,
             cast_to=Call,
-            extra_headers=extra_headers,
+            extra_headers=_with_idempotency_key(extra_headers, idempotency_key),
             extra_query=extra_query,
             timeout=timeout_,
             max_retries=0 if caller_id_mode == "shared-010" else None,

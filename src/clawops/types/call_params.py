@@ -48,6 +48,8 @@ class _CallCreateOptions(TypedDict, total=False):
     extra_headers: dict[str, str] | None
     extra_query: dict[str, object] | None
     timeout_: float | None
+    idempotency_key: str | None
+    """선택. ``Idempotency-Key`` 헤더 — 같은 키 재제출은 처음 결과를 돌려받는다."""
 
 
 class CallCreateParams(_CallCreateOptions, total=False):
