@@ -80,12 +80,14 @@ class CallSession:
         direction: str = "inbound",
         caller_id_restricted: bool = False,
         forwarded_from: str | None = None,
+        presented_from: str | None = None,
     ) -> None:
         self.call_id = call_id
         self.from_number = from_number
         self.to_number = to_number
         self.account_id = account_id
         self.direction = direction
+        self.presented_from = presented_from
         # 수신 통화에서 발신자가 번호 표시제한(`*23#` 등)을 걸고 건 통화면 True. 번호는
         # from_number 에 그대로 있고 여부만 여기서 알 수 있다. 통신사가 표시제한 여부를 보내지
         # 않은 통화와 발신 통화는 False.

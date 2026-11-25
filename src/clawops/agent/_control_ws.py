@@ -44,7 +44,14 @@ NON_RETRYABLE_CLOSE_CODES = frozenset({CLOSE_REPLACED, CLOSE_OWNERSHIP_LOST})
 REJECTED_HANDSHAKE_STATUSES = frozenset({400, 401, 403})
 
 
-def _rejection_message(status: int, code: str | None, *, account_id: str, number: str) -> str:
+def _rejection_message(
+    status: int,
+    code: str | None,
+    *,
+    account_id: str,
+    number: str | None,
+    sdk_agent_id: str | None,
+) -> str:
     if code == "api_key_invalid":
         return (
             "API 키가 유효하지 않습니다(폐기·만료됐거나 다른 계정의 키). "
@@ -52,6 +59,11 @@ def _rejection_message(status: int, code: str | None, *, account_id: str, number
         )
     if code == "api_key_missing":
         return "API 키가 전달되지 않았습니다. api_key 또는 CLAWOPS_API_KEY 를 확인하세요."
+    if sdk_agent_id is not None:
+        return (
+            f"서버가 연결을 거절했습니다(HTTP {status}). "
+            f"계정의 공용 010 발신 권한과 sdk_agent_id({sdk_agent_id})를 확인하세요."
+        )
     if code == "number_not_owned":
         return (
             f"번호 {number} 는 계정 {account_id} 의 번호가 아닙니다(반납·회수됐거나 다른 계정 번호). "
@@ -80,11 +92,23 @@ TRANSFER_NO_CONNECTION_MESSAGE = "transfer 불가: control 연결이 끊겨 있�
 
 
 def build_control_ws_url(
-    *, base_url: str, account_id: str, number: str, role: str | None = None
+    *,
+    base_url: str,
+    account_id: str,
+    number: str | None = None,
+    sdk_agent_id: str | None = None,
+    role: str | None = None,
 ) -> str:
     scheme = "wss" if base_url.startswith("https") else "ws"
     host = base_url.replace("https://", "").replace("http://", "").rstrip("/")
-    url = f"{scheme}://{host}/v1/accounts/{account_id}/agent/listen?number={quote(number)}"
+    if (number is None) == (sdk_agent_id is None):
+        raise ValueError("number 또는 sdk_agent_id 중 하나만 지정하세요.")
+    query = (
+        f"sdkAgentId={quote(sdk_agent_id, safe='')}"
+        if sdk_agent_id is not None
+        else f"number={quote(number or '')}"
+    )
+    url = f"{scheme}://{host}/v1/accounts/{account_id}/agent/listen?{query}"
     # role=retiring = "나는 이미 물러난 프로세스다. 자리를 뺏지 말라."
     #   lame duck 이 된 뒤에는 재연결하지 않는 것이 1차 방어지만, 그 방어를 우회하는 경로가
     #   남아 있을 수 있다(하위 레이어 재시도 등). 그때 이 플래그가 없으면 SIGTERM 도 안 받은
@@ -101,7 +125,8 @@ class ControlWebSocket:
         base_url: str,
         api_key: str,
         account_id: str,
-        number: str,
+        number: str | None = None,
+        sdk_agent_id: str | None = None,
         on_call_incoming: Callable[[dict[str, Any]], Awaitable[None]],
         on_call_ended: Callable[[dict[str, Any]], Awaitable[None]],
         on_call_outbound_ready: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
@@ -111,8 +136,12 @@ class ControlWebSocket:
         on_retired: Callable[[str], None] | None = None,
         on_rejected: Callable[[AgentAuthRejectedError], None] | None = None,
     ) -> None:
-        self._url_parts = {"base_url": base_url, "account_id": account_id, "number": number}
-        self._url = build_control_ws_url(base_url=base_url, account_id=account_id, number=number)
+        self._account_id = account_id
+        self._number = number
+        self._sdk_agent_id = sdk_agent_id
+        self._url = build_control_ws_url(
+            base_url=base_url, account_id=account_id, number=number, sdk_agent_id=sdk_agent_id
+        )
         self._api_key = api_key
         self._on_call_incoming = on_call_incoming
         self._on_call_ended = on_call_ended
@@ -149,7 +178,7 @@ class ControlWebSocket:
             return
         self._lame_duck = True
         # 이 뒤에 재연결하는 경로가 남아 있다면, 적어도 자리를 뺏지는 않게 한다.
-        self._url = build_control_ws_url(**self._url_parts, role="retiring")
+        self._url += "&role=retiring"
 
     @property
     def lame_duck(self) -> bool:
@@ -194,7 +223,8 @@ class ControlWebSocket:
                     headers={"Authorization": f"Bearer {self._api_key}"},
                     heartbeat=30.0,
                 )
-                self._connected.set()
+                if self._sdk_agent_id is None:
+                    self._connected.set()
                 log.info(f"Control WS connected: {self._url}")
                 delay = INITIAL_RECONNECT_DELAY
 
@@ -247,8 +277,9 @@ class ControlWebSocket:
                         _rejection_message(
                             e.status,
                             code,
-                            account_id=self._url_parts["account_id"],
-                            number=self._url_parts["number"],
+                            account_id=self._account_id,
+                            number=self._number,
+                            sdk_agent_id=self._sdk_agent_id,
                         ),
                         status=e.status,
                         code=code,
@@ -274,6 +305,8 @@ class ControlWebSocket:
                     )
                 log.warning(f"Control WS error: {type(e).__name__}: {e}")
             finally:
+                if self._sdk_agent_id is not None:
+                    self._connected.clear()
                 self._fire_connection_lost()
                 if self._ws and not self._ws.closed:
                     await self._ws.close()
@@ -296,7 +329,10 @@ class ControlWebSocket:
         """수신 메시지 하나를 해당 핸들러로 보낸다. 예외는 호출부가 격리한다."""
         data = json.loads(raw)
         event = data.get("event")
-        if event == "call.incoming":
+        if event == "agent.ready" and self._sdk_agent_id is not None:
+            # 번호 없는 발신의 사전 검증은 DB에 등록된 연결만 받는다.
+            self._connected.set()
+        elif event == "call.incoming":
             await self._on_call_incoming(data)
         elif event == "call.ended":
             # 종료 통지는 전환 대기의 **정리 신호**다(결과를 만들어내는 신호가 아니다).

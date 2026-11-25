@@ -5,7 +5,7 @@ import importlib
 from typing import TYPE_CHECKING
 
 from .._exceptions import AgentAuthRejectedError, AgentConnectionError, AgentError
-from ._agent import ClawOpsAgent, ToolConfig
+from ._agent import ClawOpsAgent, ClawOpsAgentOptions, ToolConfig
 from ._deploy_checks import clear_stale_ready_marker
 from ._incoming import IncomingCall
 from ._builtin_tools import BuiltinTool
@@ -40,6 +40,7 @@ __all__ = [
     "DtmfCollectorBusy",
     "IncomingCall",
     "ClawOpsAgent",
+    "ClawOpsAgentOptions",
     "MediaWebSocket",
     "ToolConfig",
     "ToolRegistry",

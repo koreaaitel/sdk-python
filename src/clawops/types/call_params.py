@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Annotated, Literal, Union
 
-from typing_extensions import Required, TypedDict
+from typing_extensions import Required, TypeAlias, TypedDict
 
 from .._utils import PropertyInfo
 
@@ -23,51 +23,105 @@ class CallContextParam(TypedDict, total=False):
     """요구사항에서 참조할 통화별 구조화 데이터 (최대 50개)."""
 
 
-class CallCreateParams(TypedDict, total=False):
-    """발신 전화 생성 요청 파라미터.
+CallerIdMode: TypeAlias = Literal["shared-010"]
+"""Calls API에서 공용 010 회선을 선택하는 발신 방식."""
 
-    **4가지 모드** — ``url``\\, ``agent_id``\\, ``call_flow_id``\\는 서로 배타적입니다.
 
-    - **VoiceML 모드**: ``url``\\을 지정하면 VoiceML로 통화를 제어합니다.
-    - **매니지드 에이전트 모드**: ``agent_id``\\를 지정하면 콘솔에서 만든 AI 에이전트가
-      통화를 처리합니다. ``call_context``\\로 이번 통화만의 지시를 덧붙일 수 있습니다.
-    - **콜 플로우 모드**: ``call_flow_id``\\를 지정하면 결정적 ARS 플로우가 통화를
-      진행합니다. ``variables``\\로 시작 변수를 넘깁니다.
-    - **Agent SDK 모드**: 셋 다 생략하면 From 번호에 연결된 Agent SDK로 통화가 연결됩니다.
-    """
+class _CallCreateOptions(TypedDict, total=False):
+    """일반 발신과 공용 010 발신이 공유하는 파라미터."""
 
     to: Required[Annotated[str, PropertyInfo(alias="To")]]
     """수신 대상. 전화번호(PSTN) 또는 sip: URI(내선)."""
 
-    from_: Required[Annotated[str, PropertyInfo(alias="From")]]
-    """발신 번호. 계정에 등록된 번호여야 합니다."""
-
-    url: Annotated[str, PropertyInfo(alias="Url")]
-    """통화 연결 시 VoiceML 명령을 반환할 URL. ``agent_id``\\·``call_flow_id``\\와 배타."""
-
-    agent_id: Annotated[str, PropertyInfo(alias="AgentId")]
-    """콘솔에서 만든 매니지드 에이전트 ID. ``url``\\·``call_flow_id``\\와 배타."""
-
-    call_context: Annotated[CallContextParam, PropertyInfo(alias="CallContext")]
-    """``agent_id`` 에이전트의 이번 통화에만 적용되는 컨텍스트."""
-
-    call_flow_id: Annotated[str, PropertyInfo(alias="CallFlowId")]
-    """콜 플로우(결정적 ARS) ID. ``url``\\·``agent_id``\\와 배타."""
-
-    variables: Annotated[dict[str, Union[str, float, bool]], PropertyInfo(alias="Variables")]
-    """콜 플로우 시작 변수. ``call_flow_id``\\와 함께일 때만 사용할 수 있습니다."""
-
-    status_callback: Annotated[str, PropertyInfo(alias="StatusCallback")]
+    status_callback: Annotated[str | None, PropertyInfo(alias="StatusCallback")]
     """통화 상태 변경 시 POST 요청을 받을 콜백 URL."""
 
-    status_callback_event: Annotated[str, PropertyInfo(alias="StatusCallbackEvent")]
+    status_callback_event: Annotated[str | None, PropertyInfo(alias="StatusCallbackEvent")]
     """수신할 상태 이벤트 목록 (공백 구분)."""
 
-    timeout: Annotated[int, PropertyInfo(alias="Timeout")]
+    timeout: Annotated[int | None, PropertyInfo(alias="Timeout")]
     """발신 타임아웃 (초). 기본값: 60."""
 
-    machine_detection: Annotated[Literal["Enable", "Hangup"], PropertyInfo(alias="MachineDetection")]
+    machine_detection: Annotated[Literal["Enable", "Hangup"] | None, PropertyInfo(alias="MachineDetection")]
     """자동응답기/음성사서함 감지(AMD)."""
+
+    extra_headers: dict[str, str] | None
+    extra_query: dict[str, object] | None
+    timeout_: float | None
+    idempotency_key: str | None
+    """선택. ``Idempotency-Key`` 헤더 — 같은 키 재제출은 처음 결과를 돌려받는다."""
+
+
+class CallCreateParams(_CallCreateOptions, total=False):
+    """계정에 등록된 전화번호로 일반 발신할 때 쓰는 파라미터."""
+
+    from_: Required[Annotated[str, PropertyInfo(alias="From")]]
+    caller_id_mode: Annotated[None, PropertyInfo(alias="CallerIdMode")]
+    sdk_agent_id: Annotated[None, PropertyInfo(alias="SdkAgentId")]
+    url: Annotated[str | None, PropertyInfo(alias="Url")]
+    agent_id: Annotated[str | None, PropertyInfo(alias="AgentId")]
+    call_context: Annotated[CallContextParam | None, PropertyInfo(alias="CallContext")]
+    call_flow_id: Annotated[str | None, PropertyInfo(alias="CallFlowId")]
+    variables: Annotated[dict[str, Union[str, float, bool]] | None, PropertyInfo(alias="Variables")]
+
+
+class _Shared010CallOptions(_CallCreateOptions, total=False):
+    caller_id_mode: Required[Annotated[CallerIdMode, PropertyInfo(alias="CallerIdMode")]]
+
+
+class _Shared010SdkCall(_Shared010CallOptions, total=False):
+    sdk_agent_id: Required[Annotated[str, PropertyInfo(alias="SdkAgentId")]]
+    from_: None
+    agent_id: None
+    url: None
+    call_flow_id: None
+    call_context: None
+    variables: None
+
+
+class _Shared010NumberCall(_Shared010CallOptions, total=False):
+    from_: Required[Annotated[str, PropertyInfo(alias="From")]]
+    sdk_agent_id: None
+    agent_id: None
+    url: None
+    call_flow_id: None
+    call_context: None
+    variables: None
+
+
+class _Shared010TargetCall(_Shared010CallOptions, total=False):
+    from_: Annotated[str | None, PropertyInfo(alias="From")]
+    sdk_agent_id: None
+
+
+class _Shared010ManagedCall(_Shared010TargetCall, total=False):
+    agent_id: Required[Annotated[str, PropertyInfo(alias="AgentId")]]
+    call_context: Annotated[CallContextParam | None, PropertyInfo(alias="CallContext")]
+    url: None
+    call_flow_id: None
+    variables: None
+
+
+class _Shared010VoiceMLCall(_Shared010TargetCall, total=False):
+    url: Required[Annotated[str, PropertyInfo(alias="Url")]]
+    agent_id: None
+    call_flow_id: None
+    call_context: None
+    variables: None
+
+
+class _Shared010FlowCall(_Shared010TargetCall, total=False):
+    call_flow_id: Required[Annotated[str, PropertyInfo(alias="CallFlowId")]]
+    variables: Annotated[dict[str, Union[str, float, bool]] | None, PropertyInfo(alias="Variables")]
+    agent_id: None
+    url: None
+    call_context: None
+
+
+Shared010CallCreateParams: TypeAlias = Union[
+    _Shared010SdkCall, _Shared010NumberCall, _Shared010ManagedCall, _Shared010VoiceMLCall, _Shared010FlowCall
+]
+"""공용 010 발신에는 번호에 연결된 SDK, SDK ID 또는 통화 처리 대상 하나를 지정합니다."""
 
 
 class CallListParams(TypedDict, total=False):

@@ -1,14 +1,34 @@
 from __future__ import annotations
 
-from typing import Literal
+from typing import Literal, overload
+
+from typing_extensions import Unpack
 
 from .._resource import AsyncAPIResource, SyncAPIResource
 from .._utils import strip_not_given
 from ..pagination import AsyncPage, SyncPage
 from ..types.call import Call, CallControlResponse
-from ..types.call_params import CallContextParam
+from ..types.call_params import (
+    CallContextParam,
+    CallCreateParams,
+    CallerIdMode,
+    _Shared010FlowCall,
+    _Shared010ManagedCall,
+    _Shared010NumberCall,
+    _Shared010SdkCall,
+    _Shared010VoiceMLCall,
+)
 from ..types.summary import SummaryStatus
 from ..types.transcript import TranscriptRequestAccepted, TranscriptStatus
+
+
+def _with_idempotency_key(
+    extra_headers: dict[str, str] | None, idempotency_key: str | None
+) -> dict[str, str] | None:
+    """``Idempotency-Key`` 를 Structured Field String(따옴표) 형태로 붙인다."""
+    if idempotency_key is None:
+        return extra_headers
+    return {**(extra_headers or {}), "Idempotency-Key": f'"{idempotency_key}"'}
 
 
 def _call_context_body(ctx: CallContextParam | None) -> dict[str, object] | None:
@@ -30,11 +50,31 @@ def _call_context_body(ctx: CallContextParam | None) -> dict[str, object] | None
 class Calls(SyncAPIResource):
     """통화(Calls) 리소스. 아웃바운드 전화 발신, 통화 목록 조회, 단건 조회, 통화 제어(종료)."""
 
+    @overload
+    def create(self, **kwargs: Unpack[CallCreateParams]) -> Call: ...
+
+    @overload
+    def create(self, **kwargs: Unpack[_Shared010NumberCall]) -> Call: ...
+
+    @overload
+    def create(self, **kwargs: Unpack[_Shared010SdkCall]) -> Call: ...
+
+    @overload
+    def create(self, **kwargs: Unpack[_Shared010ManagedCall]) -> Call: ...
+
+    @overload
+    def create(self, **kwargs: Unpack[_Shared010VoiceMLCall]) -> Call: ...
+
+    @overload
+    def create(self, **kwargs: Unpack[_Shared010FlowCall]) -> Call: ...
+
     def create(
         self,
         *,
         to: str,
-        from_: str,
+        from_: str | None = None,
+        caller_id_mode: CallerIdMode | None = None,
+        sdk_agent_id: str | None = None,
         url: str | None = None,
         agent_id: str | None = None,
         call_context: CallContextParam | None = None,
@@ -47,23 +87,27 @@ class Calls(SyncAPIResource):
         extra_headers: dict[str, str] | None = None,
         extra_query: dict[str, object] | None = None,
         timeout_: float | None = None,
+        idempotency_key: str | None = None,
     ) -> Call:
         """발신 전화를 생성합니다.
 
         PSTN 번호로 아웃바운드 전화를 발신합니다.
-        From 번호는 계정에 등록된 번호여야 합니다.
+        일반 발신의 From은 계정에 등록된 번호여야 합니다.
+        공용 010 발신은 요청이 접수된 뒤 응답이 유실될 수 있어 자동 재시도를 끕니다.
 
-        **4가지 모드** — ``url``, ``agent_id``, ``call_flow_id``는 서로 배타적입니다:
+        통화 처리 대상인 ``url``, ``agent_id``, ``call_flow_id``, ``sdk_agent_id``는 서로 배타적입니다.
 
         - **VoiceML 모드**: ``url``을 지정하면 VoiceML로 통화를 제어합니다.
         - **매니지드 에이전트 모드**: ``agent_id``를 지정하면 콘솔에서 만든 AI 에이전트가
           통화를 처리합니다.
         - **콜 플로우 모드**: ``call_flow_id``를 지정하면 결정적 ARS 플로우가 진행합니다.
-        - **Agent SDK 모드**: 셋 다 생략하면 From 번호에 연결된 Agent SDK로 연결됩니다.
+        - **Agent SDK 모드**: ``sdk_agent_id`` 또는 기존 ``from_`` 번호에 연결된 SDK가 통화를 처리합니다.
 
         Args:
             to: 수신 전화번호.
-            from_: 발신 번호. 계정에 등록된 번호여야 합니다.
+            from_: 계정에 등록된 발신번호. 공용 010 발신에서 통화 처리 대상을 명시하면 생략할 수 있습니다.
+            caller_id_mode: ``"shared-010"``이면 서버가 공용 010 회선을 선택합니다.
+            sdk_agent_id: 번호 없이 연결된 자체 호스팅 SDK의 식별자. 공용 010 발신에서 사용합니다.
             url: VoiceML 명령을 반환할 URL. ``agent_id``·``call_flow_id``와 배타.
             agent_id: 콘솔에서 만든 매니지드 에이전트 ID. ``url``·``call_flow_id``와 배타.
             call_context: ``agent_id`` 에이전트의 **이번 통화에만** 적용되는 컨텍스트.
@@ -84,6 +128,9 @@ class Calls(SyncAPIResource):
             extra_headers: 추가 HTTP 헤더.
             extra_query: 추가 쿼리 파라미터.
             timeout_: 이 요청의 타임아웃 (초).
+            idempotency_key: 선택. 같은 계정에서 같은 키로 다시 보낸 요청은 새 통화를 만들지 않고
+                처음 결과를 돌려받습니다(``Idempotency-Key`` 헤더). UUID 처럼 요청마다 고유한 값을 쓰고,
+                응답을 받지 못해 직접 다시 보낼 때 같은 값을 씁니다. 키는 24시간 유지됩니다.
 
         Returns:
             생성된 Call 객체.
@@ -100,6 +147,8 @@ class Calls(SyncAPIResource):
             {
                 "To": to,
                 "From": from_,
+                "CallerIdMode": caller_id_mode,
+                "SdkAgentId": sdk_agent_id,
                 "Url": url,
                 "AgentId": agent_id,
                 "CallContext": _call_context_body(call_context),
@@ -115,9 +164,10 @@ class Calls(SyncAPIResource):
             f"{self._base_path}/calls",
             body=body,
             cast_to=Call,
-            extra_headers=extra_headers,
+            extra_headers=_with_idempotency_key(extra_headers, idempotency_key),
             extra_query=extra_query,
             timeout=timeout_,
+            max_retries=0 if caller_id_mode == "shared-010" else None,
         )
 
     def list(
@@ -339,11 +389,31 @@ class Calls(SyncAPIResource):
 class AsyncCalls(AsyncAPIResource):
     """통화(Calls) 비동기 리소스. Calls의 async 버전."""
 
+    @overload
+    async def create(self, **kwargs: Unpack[CallCreateParams]) -> Call: ...
+
+    @overload
+    async def create(self, **kwargs: Unpack[_Shared010NumberCall]) -> Call: ...
+
+    @overload
+    async def create(self, **kwargs: Unpack[_Shared010SdkCall]) -> Call: ...
+
+    @overload
+    async def create(self, **kwargs: Unpack[_Shared010ManagedCall]) -> Call: ...
+
+    @overload
+    async def create(self, **kwargs: Unpack[_Shared010VoiceMLCall]) -> Call: ...
+
+    @overload
+    async def create(self, **kwargs: Unpack[_Shared010FlowCall]) -> Call: ...
+
     async def create(
         self,
         *,
         to: str,
-        from_: str,
+        from_: str | None = None,
+        caller_id_mode: CallerIdMode | None = None,
+        sdk_agent_id: str | None = None,
         url: str | None = None,
         agent_id: str | None = None,
         call_context: CallContextParam | None = None,
@@ -356,12 +426,15 @@ class AsyncCalls(AsyncAPIResource):
         extra_headers: dict[str, str] | None = None,
         extra_query: dict[str, object] | None = None,
         timeout_: float | None = None,
+        idempotency_key: str | None = None,
     ) -> Call:
         """발신 전화를 비동기로 생성합니다. 자세한 내용은 Calls.create를 참고하세요."""
         body = strip_not_given(
             {
                 "To": to,
                 "From": from_,
+                "CallerIdMode": caller_id_mode,
+                "SdkAgentId": sdk_agent_id,
                 "Url": url,
                 "AgentId": agent_id,
                 "CallContext": _call_context_body(call_context),
@@ -377,9 +450,10 @@ class AsyncCalls(AsyncAPIResource):
             f"{self._base_path}/calls",
             body=body,
             cast_to=Call,
-            extra_headers=extra_headers,
+            extra_headers=_with_idempotency_key(extra_headers, idempotency_key),
             extra_query=extra_query,
             timeout=timeout_,
+            max_retries=0 if caller_id_mode == "shared-010" else None,
         )
 
     async def list(
